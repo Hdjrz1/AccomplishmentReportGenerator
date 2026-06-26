@@ -92,6 +92,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const setupNextBtn = document.getElementById('setup-next-btn');
     const setupFinishBtn = document.getElementById('setup-finish-btn');
     const setupCancelBtn = document.getElementById('setup-cancel-btn');
+
+    const reportLoadingOverlay = document.getElementById('report-loading-overlay');
+    const reportLoadingFilename = document.getElementById('report-loading-filename');
+    const reportLoadingSteps = document.getElementById('report-loading-steps');
+    const reportLoadingProgress = document.getElementById('report-loading-progress');
+    const reportLoadingProgressBar = document.getElementById('report-loading-progress-bar');
     
     const SYSTEM_DIRS_STORAGE_KEY = 'system_dirs';
     const GIT_AUTHORS_STORAGE_KEY = 'git_authors';
@@ -323,6 +329,148 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             generateReportBtn.innerHTML = idleHtml;
         }
+    }
+
+    let reportLoadingStepTimer = null;
+    let reportLoadingHideTimer = null;
+    let reportLoadingCurrentStep = 0;
+
+    const REPORT_LOADING_PROGRESS = [8, 24, 44, 68, 88];
+
+    function setReportLoadingProgress(percent) {
+        if (reportLoadingProgressBar) {
+            reportLoadingProgressBar.style.width = `${percent}%`;
+        }
+        if (reportLoadingProgress) {
+            reportLoadingProgress.setAttribute('aria-valuenow', String(Math.round(percent)));
+        }
+    }
+
+    function resetReportLoadingSteps() {
+        reportLoadingCurrentStep = 0;
+        if (!reportLoadingSteps) return;
+        reportLoadingSteps.querySelectorAll('.report-loading-step').forEach((el, index) => {
+            el.classList.remove('is-active', 'is-done');
+            if (index === 0) el.classList.add('is-active');
+        });
+        setReportLoadingProgress(REPORT_LOADING_PROGRESS[0]);
+    }
+
+    function advanceReportLoadingStep() {
+        const steps = reportLoadingSteps?.querySelectorAll('.report-loading-step');
+        if (!steps || reportLoadingCurrentStep >= steps.length - 1) return;
+
+        steps[reportLoadingCurrentStep].classList.remove('is-active');
+        steps[reportLoadingCurrentStep].classList.add('is-done');
+        reportLoadingCurrentStep += 1;
+        steps[reportLoadingCurrentStep].classList.add('is-active');
+        setReportLoadingProgress(REPORT_LOADING_PROGRESS[reportLoadingCurrentStep] || 88);
+    }
+
+    function startReportLoadingStepTimer() {
+        window.clearInterval(reportLoadingStepTimer);
+        reportLoadingStepTimer = window.setInterval(advanceReportLoadingStep, 750);
+    }
+
+    function stopReportLoadingStepTimer() {
+        window.clearInterval(reportLoadingStepTimer);
+        reportLoadingStepTimer = null;
+    }
+
+    function showReportLoadingOverlay(filename) {
+        if (!reportLoadingOverlay) return;
+
+        stopReportLoadingStepTimer();
+        window.clearTimeout(reportLoadingHideTimer);
+        reportLoadingOverlay.classList.remove('is-open', 'is-closing', 'is-complete');
+        resetReportLoadingSteps();
+
+        if (reportLoadingFilename) {
+            reportLoadingFilename.textContent = filename || 'Accomplishment Report.docx';
+        }
+
+        reportLoadingOverlay.hidden = false;
+        reportLoadingOverlay.setAttribute('aria-busy', 'true');
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                reportLoadingOverlay.classList.add('is-open');
+            });
+        });
+        startReportLoadingStepTimer();
+    }
+
+    function finishReportLoadingSteps() {
+        stopReportLoadingStepTimer();
+        const steps = reportLoadingSteps?.querySelectorAll('.report-loading-step');
+        if (steps) {
+            steps.forEach((el) => {
+                el.classList.remove('is-active');
+                el.classList.add('is-done');
+            });
+        }
+        setReportLoadingProgress(100);
+        reportLoadingOverlay?.classList.add('is-complete');
+    }
+
+    function hideReportLoadingOverlay(options = {}) {
+        const { success = false } = options;
+
+        return new Promise((resolve) => {
+            if (!reportLoadingOverlay || reportLoadingOverlay.hidden) {
+                resolve();
+                return;
+            }
+
+            stopReportLoadingStepTimer();
+            window.clearTimeout(reportLoadingHideTimer);
+
+            const performHide = () => {
+                if (!reportLoadingOverlay.classList.contains('is-open')) {
+                    reportLoadingOverlay.hidden = true;
+                    reportLoadingOverlay.classList.remove('is-open', 'is-closing', 'is-complete');
+                    reportLoadingOverlay.setAttribute('aria-busy', 'false');
+                    resolve();
+                    return;
+                }
+
+                reportLoadingOverlay.classList.remove('is-open');
+                reportLoadingOverlay.classList.add('is-closing');
+
+                const panel = reportLoadingOverlay.querySelector('.report-loading-panel');
+                if (!panel) {
+                    reportLoadingOverlay.hidden = true;
+                    reportLoadingOverlay.classList.remove('is-closing', 'is-complete');
+                    reportLoadingOverlay.setAttribute('aria-busy', 'false');
+                    resolve();
+                    return;
+                }
+
+                let completed = false;
+                const finish = () => {
+                    if (completed) return;
+                    completed = true;
+                    panel.removeEventListener('animationend', onAnimationEnd);
+                    reportLoadingOverlay.hidden = true;
+                    reportLoadingOverlay.classList.remove('is-closing', 'is-complete');
+                    reportLoadingOverlay.setAttribute('aria-busy', 'false');
+                    resolve();
+                };
+
+                const onAnimationEnd = (event) => {
+                    if (event.target === panel) finish();
+                };
+
+                panel.addEventListener('animationend', onAnimationEnd);
+                reportLoadingHideTimer = window.setTimeout(finish, 300);
+            };
+
+            if (success) {
+                finishReportLoadingSteps();
+                reportLoadingHideTimer = window.setTimeout(performHide, 480);
+            } else {
+                performHide();
+            }
+        });
     }
     
     let themeSwitchTimer = null;
@@ -2273,6 +2421,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Set generating state
         setGenerateButtonBusy(true);
+        showReportLoadingOverlay(buildOutputFileName(dateRangeStr));
         
         try {
             const payload = {
@@ -2306,7 +2455,11 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (result.success) {
                 const savedPath = result.file_path || `${outputDir}\\${result.file_name}`;
-                showToast('Report Generated!', `File saved to ${savedPath}`);
+                await hideReportLoadingOverlay({ success: true });
+                const toastMsg = result.alternate_name_used
+                    ? `The original file was open or locked. Saved as: ${savedPath}`
+                    : `File saved to ${savedPath}`;
+                showToast('Report Generated!', toastMsg);
                 console.log('Saved to:', savedPath);
                 invalidateOutputDocsCache();
             } else {
@@ -2314,6 +2467,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (err) {
             console.error(err);
+            await hideReportLoadingOverlay({ success: false });
             showToast('Error', err.message || 'Failed to generate report. Make sure the output path is writable.', true);
         } finally {
             setGenerateButtonBusy(false);

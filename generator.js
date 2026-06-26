@@ -11,7 +11,7 @@ const {
     buildActsSignatureBlockXml,
     buildActsDocumentXml,
     buildActsHeaderXml,
-    writeDocxUpdates
+    writeDocxUpdatesWithFallback
 } = require('./template/acts-docx');
 
 const DOC_NS = '<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpsCustomData="http://www.wps.cn/officeDocument/2013/wpsCustomData" mc:Ignorable="w14 w15 wp14">';
@@ -817,10 +817,7 @@ function main() {
         const outputFileName = `Accomplishment Report - ${safeDate}.docx`;
         const outputPath = path.join(reportsDir, outputFileName);
         
-        // 3. Copy Template to Output
-        fs.copyFileSync(templateFile.path, outputPath);
-        
-        // 4. Generate document.xml and write into the copied template package
+        // 3. Generate document.xml and write the report from the template package
         const xml = buildReportDocumentXml(data, templateFile.path);
         const docxUpdates = { documentXml: xml };
 
@@ -835,16 +832,18 @@ function main() {
             }
         }
 
-        writeDocxUpdates(outputPath, docxUpdates);
+        const savedOutputPath = writeDocxUpdatesWithFallback(outputPath, docxUpdates, templateFile.path);
+        const savedFileName = path.basename(savedOutputPath);
         
         // Print success JSON response
         console.log(JSON.stringify({
             success: true,
             message: 'Report compiled successfully with Node.js!',
-            file_name: outputFileName,
-            file_path: outputPath,
+            file_name: savedFileName,
+            file_path: savedOutputPath,
             template_used: templateFile.name,
-            template_id: templateFile.id
+            template_id: templateFile.id,
+            alternate_name_used: savedOutputPath !== outputPath
         }));
         
     } catch (err) {

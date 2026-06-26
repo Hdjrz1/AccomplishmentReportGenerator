@@ -2524,3 +2524,309 @@ body.light-theme .sticky-generate-bar {
         max-width: none;
     }
 }
+
+/* Report Generation Loading Overlay */
+.report-loading-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 11000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.report-loading-overlay[hidden] {
+    display: none !important;
+}
+
+.report-loading-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(6, 10, 20, 0.72);
+    backdrop-filter: blur(8px);
+    opacity: 0;
+}
+
+.report-loading-overlay.is-open .report-loading-backdrop {
+    animation: reportLoadingBackdropIn 0.3s ease forwards;
+}
+
+.report-loading-overlay.is-closing .report-loading-backdrop {
+    animation: reportLoadingBackdropOut 0.22s ease forwards;
+}
+
+.report-loading-panel {
+    position: relative;
+    width: min(440px, 100%);
+    padding: 36px 32px 28px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: calc(var(--border-radius) + 4px);
+    box-shadow:
+        0 24px 48px -12px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    text-align: center;
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+}
+
+.report-loading-overlay.is-open .report-loading-panel {
+    animation: reportLoadingPanelIn 0.36s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.report-loading-overlay.is-closing .report-loading-panel {
+    animation: reportLoadingPanelOut 0.22s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes reportLoadingBackdropIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes reportLoadingBackdropOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+
+@keyframes reportLoadingPanelIn {
+    from {
+        opacity: 0;
+        transform: translateY(16px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes reportLoadingPanelOut {
+    from {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(10px) scale(0.98);
+    }
+}
+
+.report-loading-spinner-wrap {
+    position: relative;
+    width: 88px;
+    height: 88px;
+    margin: 0 auto 22px;
+}
+
+.report-loading-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 3px solid transparent;
+    border-top-color: var(--success);
+    border-right-color: rgba(16, 185, 129, 0.25);
+    animation: reportLoadingSpin 1.1s linear infinite;
+}
+
+.report-loading-ring--inner {
+    inset: 10px;
+    border-top-color: var(--primary);
+    border-right-color: rgba(59, 130, 246, 0.2);
+    animation-direction: reverse;
+    animation-duration: 0.85s;
+}
+
+.report-loading-doc-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 28px;
+    color: var(--success);
+    filter: drop-shadow(0 0 12px var(--success-glow));
+    animation: reportLoadingDocPulse 2s ease-in-out infinite;
+}
+
+@keyframes reportLoadingSpin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes reportLoadingDocPulse {
+    0%, 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    50% { opacity: 0.85; transform: translate(-50%, -50%) scale(0.94); }
+}
+
+.report-loading-title {
+    font-family: var(--font-heading);
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+}
+
+.report-loading-subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 14px;
+}
+
+.report-loading-filename {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+    padding: 6px 12px;
+    margin-bottom: 22px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.report-loading-filename::before {
+    content: '\f1c2';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 11px;
+    color: var(--success);
+    flex-shrink: 0;
+}
+
+.report-loading-steps {
+    list-style: none;
+    text-align: left;
+    margin: 0 0 20px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.report-loading-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    color: var(--text-muted);
+    transition: color 0.3s ease;
+}
+
+.report-loading-step-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid var(--border-color);
+    background: var(--bg-tertiary);
+    flex-shrink: 0;
+    transition: var(--transition);
+}
+
+.report-loading-step-icon i {
+    font-size: 10px;
+    opacity: 0;
+    transform: scale(0.5);
+    color: #fff;
+    transition: var(--transition);
+}
+
+.report-loading-step.is-active {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.report-loading-step.is-active .report-loading-step-icon {
+    border-color: var(--primary);
+    background: rgba(59, 130, 246, 0.12);
+    box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+.report-loading-step.is-active .report-loading-step-icon::after {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--primary);
+    animation: reportLoadingStepPulse 1.2s ease-in-out infinite;
+}
+
+.report-loading-step.is-active .report-loading-step-icon i {
+    display: none;
+}
+
+.report-loading-step.is-done {
+    color: var(--text-secondary);
+}
+
+.report-loading-step.is-done .report-loading-step-icon {
+    border-color: var(--success);
+    background: var(--success);
+    box-shadow: 0 0 0 3px var(--success-glow);
+}
+
+.report-loading-step.is-done .report-loading-step-icon::after {
+    display: none;
+}
+
+.report-loading-step.is-done .report-loading-step-icon i {
+    opacity: 1;
+    transform: scale(1);
+}
+
+@keyframes reportLoadingStepPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.75); }
+}
+
+.report-loading-progress {
+    height: 4px;
+    background: var(--bg-tertiary);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.report-loading-progress-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--primary), var(--success));
+    transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 0 12px var(--success-glow);
+}
+
+.report-loading-overlay.is-complete .report-loading-progress-bar {
+    width: 100% !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .report-loading-overlay.is-open .report-loading-backdrop,
+    .report-loading-overlay.is-closing .report-loading-backdrop,
+    .report-loading-overlay.is-open .report-loading-panel,
+    .report-loading-overlay.is-closing .report-loading-panel {
+        animation: none;
+    }
+
+    .report-loading-overlay.is-open .report-loading-backdrop {
+        opacity: 1;
+    }
+
+    .report-loading-overlay.is-open .report-loading-panel {
+        opacity: 1;
+        transform: none;
+    }
+
+    .report-loading-ring,
+    .report-loading-doc-icon,
+    .report-loading-step.is-active .report-loading-step-icon::after {
+        animation: none;
+    }
+}

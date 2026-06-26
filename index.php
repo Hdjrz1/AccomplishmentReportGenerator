@@ -1256,6 +1256,46 @@ function generateReport($data) {
         </div>
     </div>
 
+    <!-- Report Generation Loading Screen -->
+    <div id="report-loading-overlay" class="report-loading-overlay" hidden aria-live="polite" aria-busy="true" role="alertdialog" aria-labelledby="report-loading-title" aria-describedby="report-loading-subtitle">
+        <div class="report-loading-backdrop"></div>
+        <div class="report-loading-panel">
+            <div class="report-loading-spinner-wrap" aria-hidden="true">
+                <div class="report-loading-ring"></div>
+                <div class="report-loading-ring report-loading-ring--inner"></div>
+                <i class="fa-solid fa-file-word report-loading-doc-icon"></i>
+            </div>
+            <h2 id="report-loading-title" class="report-loading-title">Generating DOCX Report</h2>
+            <p id="report-loading-subtitle" class="report-loading-subtitle">Compiling your accomplishment data into a professional document…</p>
+            <p id="report-loading-filename" class="report-loading-filename"></p>
+            <ul id="report-loading-steps" class="report-loading-steps">
+                <li class="report-loading-step" data-step="0">
+                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                    <span class="report-loading-step-label">Validating report sections</span>
+                </li>
+                <li class="report-loading-step" data-step="1">
+                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                    <span class="report-loading-step-label">Compiling file modifications</span>
+                </li>
+                <li class="report-loading-step" data-step="2">
+                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                    <span class="report-loading-step-label">Building document structure</span>
+                </li>
+                <li class="report-loading-step" data-step="3">
+                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                    <span class="report-loading-step-label">Writing DOCX file</span>
+                </li>
+                <li class="report-loading-step" data-step="4">
+                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                    <span class="report-loading-step-label">Finalizing output</span>
+                </li>
+            </ul>
+            <div class="report-loading-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="report-loading-progress">
+                <div class="report-loading-progress-bar" id="report-loading-progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="toast">
         <i class="toast-icon fa-solid fa-circle-check"></i>

@@ -1,5 +1,7 @@
 const fs = require('fs');
 const AdmZip = require('adm-zip');
+const path = require('path');
+const { readFileBufferSync, writeFileAtomicSync } = require('../file-io');
 
 const ACTS_TABLE_BORDER = 'BFBFBF';
 const ACTS_HEADER_FILL = '1F4E79';
@@ -283,15 +285,52 @@ function updateZipEntry(zip, entryName, content) {
     }
 }
 
-function writeDocxUpdates(outputPath, updates) {
-    const zip = new AdmZip(outputPath);
+function writeDocxUpdates(outputPath, updates, templatePath) {
+    const sourcePath = templatePath || outputPath;
+    const zip = new AdmZip(readFileBufferSync(sourcePath));
     if (updates.documentXml) {
         updateZipEntry(zip, 'word/document.xml', updates.documentXml);
     }
     if (updates.headerXml) {
         updateZipEntry(zip, 'word/header1.xml', updates.headerXml);
     }
-    zip.writeZip(outputPath);
+    writeFileAtomicSync(outputPath, (tmpPath) => zip.writeZip(tmpPath));
+}
+
+function isLockedFileError(err) {
+    return Boolean(err && /locked/i.test(String(err.message || '')));
+}
+
+function writeDocxUpdatesWithFallback(outputPath, updates, templatePath) {
+    try {
+        writeDocxUpdates(outputPath, updates, templatePath);
+        return outputPath;
+    } catch (err) {
+        if (!isLockedFileError(err)) {
+            throw err;
+        }
+
+        const dir = path.dirname(outputPath);
+        const ext = path.extname(outputPath);
+        const base = path.basename(outputPath, ext);
+
+        for (let i = 2; i <= 99; i++) {
+            const altPath = path.join(dir, `${base} (${i})${ext}`);
+            if (fs.existsSync(altPath)) {
+                continue;
+            }
+            try {
+                writeDocxUpdates(altPath, updates, templatePath);
+                return altPath;
+            } catch (altErr) {
+                if (!isLockedFileError(altErr)) {
+                    throw altErr;
+                }
+            }
+        }
+
+        throw err;
+    }
 }
 
 function buildActsHeaderXml(templatePath, projectTitle, dateRangeText) {
@@ -316,5 +355,6 @@ module.exports = {
     buildActsDocumentXml,
     buildActsHeaderXml,
     writeDocxUpdates,
+    writeDocxUpdatesWithFallback,
     updateActsHeaderXml
 };
