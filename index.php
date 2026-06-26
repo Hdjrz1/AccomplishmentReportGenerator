@@ -1,0 +1,1271 @@
+<?php
+// PHP Backend for Git Accomplishment Report Generator
+// Set timezone
+date_default_timezone_set('Asia/Manila');
+
+// Target Directories (defaults; overridden by config.json and client system_dirs)
+define('DEFAULT_SUGGESTED_FOLDERS', [
+    'C:\\laragon\\www',
+    'C:\\xampp\\htdocs',
+    '%USERPROFILE%\\Documents\\Projects',
+    '%USERPROFILE%\\source\\repos',
+]);
+
+function expandAppPath($value) {
+    if ($value === null || $value === '') return '';
+    $userProfile = getenv('USERPROFILE') ?: '';
+    $username = getenv('USERNAME') ?: '';
+    return str_replace(
+        ['%USERPROFILE%', '%USERNAME%', '%HOMEPATH%'],
+        [$userProfile, $username, $userProfile],
+        $value
+    );
+}
+
+function loadAppConfig() {
+    $defaults = [
+        'system_dirs' => [],
+        'suggested_folders' => array_map('expandAppPath', DEFAULT_SUGGESTED_FOLDERS),
+        'output_dir' => expandAppPath('%USERPROFILE%\\Documents\\Accomplishment Reports'),
+    ];
+
+    $configPath = __DIR__ . DIRECTORY_SEPARATOR . 'config.json';
+    if (!file_exists($configPath)) {
+        return $defaults;
+    }
+
+    $parsed = json_decode(file_get_contents($configPath), true);
+    if (!is_array($parsed)) {
+        return $defaults;
+    }
+
+    $systemDirs = [];
+    if (!empty($parsed['system_dirs']) && is_array($parsed['system_dirs'])) {
+        $systemDirs = array_values(array_filter(array_map('expandAppPath', $parsed['system_dirs'])));
+    }
+
+    $suggestedFolders = $defaults['suggested_folders'];
+    if (!empty($parsed['suggested_folders']) && is_array($parsed['suggested_folders'])) {
+        $suggestedFolders = array_values(array_filter(array_map('expandAppPath', $parsed['suggested_folders'])));
+    }
+
+    return [
+        'system_dirs' => $systemDirs,
+        'suggested_folders' => $suggestedFolders,
+        'output_dir' => expandAppPath($parsed['output_dir'] ?? $defaults['output_dir']),
+    ];
+}
+
+function detectCommonDirs() {
+    $config = loadAppConfig();
+    $candidates = array_unique(array_merge($config['suggested_folders'], $config['system_dirs']));
+    $found = [];
+    foreach ($candidates as $dir) {
+        if ($dir !== '' && is_dir($dir)) {
+            $found[] = $dir;
+        }
+    }
+    return array_values($found);
+}
+
+function resolveGitExecutable() {
+    $candidates = array_values(array_filter([
+        getenv('GIT_EXECUTABLE') ?: '',
+        getenv('GIT_PATH') ?: '',
+        'C:\\Program Files\\Git\\cmd\\git.exe',
+        'C:\\Program Files\\Git\\bin\\git.exe',
+        'C:\\Program Files (x86)\\Git\\cmd\\git.exe',
+        'C:\\laragon\\bin\\git\\cmd\\git.exe',
+        'C:\\laragon\\bin\\git\\bin\\git.exe',
+    ]));
+
+    foreach ($candidates as $git) {
+        if ($git !== '' && file_exists($git)) {
+            return $git;
+        }
+    }
+
+    $where = trim(shell_exec('where git 2>NUL') ?: '');
+    if ($where !== '') {
+        $lines = preg_split('/\R/', $where);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line !== '' && file_exists($line)) {
+                return $line;
+            }
+        }
+    }
+
+    return 'git';
+}
+
+function runGitValue($gitExe, array $args) {
+    $parts = array_map('escapeshellarg', $args);
+    $command = escapeshellarg($gitExe) . ' ' . implode(' ', $parts) . ' 2>NUL';
+    return trim(shell_exec($command) ?: '');
+}
+
+function findRepoPathsFromSystemDirs($systemDirs, $limit = 8) {
+    $repos = [];
+    if (!is_array($systemDirs)) {
+        return $repos;
+    }
+
+    foreach ($systemDirs as $systemDir) {
+        $resolved = expandAppPath(trim((string)$systemDir));
+        if ($resolved === '' || !is_dir($resolved)) {
+            continue;
+        }
+
+        $entries = @scandir($resolved);
+        if ($entries === false) {
+            continue;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $fullPath = $resolved . DIRECTORY_SEPARATOR . $entry;
+            if (!is_dir($fullPath)) {
+                continue;
+            }
+
+            if (is_dir($fullPath . DIRECTORY_SEPARATOR . '.git')) {
+                $repos[] = $fullPath;
+                if (count($repos) >= $limit) {
+                    return $repos;
+                }
+            }
+        }
+    }
+
+    return $repos;
+}
+
+function buildSuggestedAuthor($name, $email) {
+    $cleanName = trim((string)$name);
+    if ($cleanName !== '') {
+        return $cleanName;
+    }
+
+    $cleanEmail = trim((string)$email);
+    if ($cleanEmail !== '' && str_contains($cleanEmail, '@')) {
+        $parts = explode('@', $cleanEmail, 2);
+        return $parts[0] ?? '';
+    }
+
+    return '';
+}
+
+function getGitIdentity($options = []) {
+    if (is_string($options)) {
+        $options = ['repo_path' => $options];
+    }
+    if (!is_array($options)) {
+        $options = [];
+    }
+
+    $explicitRepo = expandAppPath($options['repo_path'] ?? '');
+    $systemDirs = $options['system_dirs'] ?? [];
+    $gitExe = resolveGitExecutable();
+
+    if (runGitValue($gitExe, ['--version']) === '') {
+        return [
+            'name' => '',
+            'email' => '',
+            'suggested_author' => '',
+            'source' => '',
+            'git_found' => false,
+            'error' => 'Git was not found. Install Git for Windows or add it to your system PATH.',
+        ];
+    }
+
+    $name = '';
+    $email = '';
+    $source = '';
+
+    $tryConfig = function(array $args, $configSource) use ($gitExe, &$name, &$email, &$source) {
+        if ($name !== '' && $email !== '') {
+            return;
+        }
+
+        $configName = runGitValue($gitExe, array_merge($args, ['user.name']));
+        $configEmail = runGitValue($gitExe, array_merge($args, ['user.email']));
+
+        if ($name === '' && $configName !== '') {
+            $name = $configName;
+            $source = $configSource;
+        }
+        if ($email === '' && $configEmail !== '') {
+            $email = $configEmail;
+            if ($source === '') {
+                $source = $configSource;
+            }
+        }
+    };
+
+    $tryConfig(['config', '--global'], 'global');
+    $tryConfig(['config', '--system'], 'system');
+
+    $repoCandidates = [];
+    if ($explicitRepo !== '' && is_dir($explicitRepo)) {
+        $repoCandidates[] = $explicitRepo;
+    }
+    foreach (findRepoPathsFromSystemDirs($systemDirs) as $repoPath) {
+        if (!in_array($repoPath, $repoCandidates, true)) {
+            $repoCandidates[] = $repoPath;
+        }
+    }
+
+    foreach ($repoCandidates as $repoPath) {
+        if ($name !== '' && $email !== '') {
+            break;
+        }
+        $tryConfig(['-C', $repoPath, 'config'], 'repo_config');
+    }
+
+    if ($name === '' || $email === '') {
+        foreach ($repoCandidates as $repoPath) {
+            $logLine = runGitValue($gitExe, ['-C', $repoPath, 'log', '-1', '--format=%an|%ae']);
+            if ($logLine === '' || !str_contains($logLine, '|')) {
+                continue;
+            }
+
+            [$logName, $logEmail] = array_pad(explode('|', $logLine, 2), 2, '');
+            if ($name === '' && trim($logName) !== '') {
+                $name = trim($logName);
+                $source = 'recent_commit';
+            }
+            if ($email === '' && trim($logEmail) !== '') {
+                $email = trim($logEmail);
+                if ($source === '') {
+                    $source = 'recent_commit';
+                }
+            }
+            if ($name !== '' && $email !== '') {
+                break;
+            }
+        }
+    }
+
+    $suggestedAuthor = buildSuggestedAuthor($name, $email);
+    if ($suggestedAuthor === '') {
+        return [
+            'name' => $name,
+            'email' => $email,
+            'suggested_author' => '',
+            'source' => '',
+            'git_found' => true,
+            'error' => count($repoCandidates) > 0
+                ? 'No git user identity found in config or recent commits. Add your username manually.'
+                : 'No git user identity found. Set git config user.name or add a project folder first.',
+        ];
+    }
+
+    return [
+        'name' => $name,
+        'email' => $email,
+        'suggested_author' => $suggestedAuthor,
+        'source' => $source,
+        'git_found' => true,
+        'error' => '',
+    ];
+}
+
+function resolveSystemDirs($requestedDirs = null) {
+    $config = loadAppConfig();
+    $source = (is_array($requestedDirs) && count($requestedDirs) > 0)
+        ? $requestedDirs
+        : $config['system_dirs'];
+
+    $normalized = [];
+    foreach ($source as $dir) {
+        $path = expandAppPath(trim((string)$dir));
+        if ($path !== '') {
+            $normalized[$path] = $path;
+        }
+    }
+
+    return array_values($normalized);
+}
+
+function resolveOutputDir($requestedDir = null) {
+    if (!empty($requestedDir)) {
+        return expandAppPath($requestedDir);
+    }
+    return loadAppConfig()['output_dir'];
+}
+
+function buildOutputFileName($dateRangeText) {
+    $safeDate = preg_replace('/[\\\\\\/:*?"<>|]/', '-', (string)$dateRangeText);
+    return "Accomplishment Report - {$safeDate}.docx";
+}
+
+function getDefaultTemplatePath() {
+    return __DIR__ . DIRECTORY_SEPARATOR . 'template' . DIRECTORY_SEPARATOR . 'default-template.docx';
+}
+
+function getActsTemplatePath() {
+    return __DIR__ . DIRECTORY_SEPARATOR . 'template' . DIRECTORY_SEPARATOR . 'acts-template.docx';
+}
+
+function getTemplateInfo($templateId = 'default') {
+    $templates = [
+        'default' => [
+            'id' => 'default',
+            'label' => 'Default (5-section)',
+            'path' => getDefaultTemplatePath(),
+            'spec_path' => __DIR__ . DIRECTORY_SEPARATOR . 'template' . DIRECTORY_SEPARATOR . 'default-template.md',
+        ],
+        'acts' => [
+            'id' => 'acts',
+            'label' => 'ACTS Colleges (Extended)',
+            'path' => getActsTemplatePath(),
+            'spec_path' => __DIR__ . DIRECTORY_SEPARATOR . 'template' . DIRECTORY_SEPARATOR . 'acts-template.md',
+        ],
+    ];
+
+    $entry = $templates[$templateId] ?? $templates['default'];
+    if (!is_file($entry['path'])) {
+        return [
+            'id' => $entry['id'],
+            'label' => $entry['label'],
+            'name' => basename($entry['path']),
+            'path' => $entry['path'],
+            'mtime' => null,
+            'source' => 'bundled',
+            'spec_path' => $entry['spec_path'],
+            'missing' => true,
+        ];
+    }
+
+    return [
+        'id' => $entry['id'],
+        'label' => $entry['label'],
+        'name' => basename($entry['path']),
+        'path' => $entry['path'],
+        'mtime' => filemtime($entry['path']),
+        'source' => 'bundled',
+        'spec_path' => $entry['spec_path'],
+    ];
+}
+
+function listReportTemplates() {
+    return [getTemplateInfo('default'), getTemplateInfo('acts')];
+}
+
+function getDefaultTemplateInfo() {
+    return getTemplateInfo('default');
+}
+
+function listOutputDocs($requestedDir = null) {
+    $outputDir = resolveOutputDir($requestedDir);
+    $result = [
+        'output_dir' => $outputDir,
+        'dir_exists' => false,
+        'files' => [],
+        'template' => getDefaultTemplateInfo(),
+        'templates' => listReportTemplates(),
+    ];
+
+    if (!is_dir($outputDir)) {
+        return $result;
+    }
+
+    $result['dir_exists'] = true;
+    $files = [];
+
+    foreach (scandir($outputDir) as $name) {
+        if (strpos($name, '~$') === 0) {
+            continue;
+        }
+        if (!preg_match('/\.docx$/i', $name)) {
+            continue;
+        }
+
+        $fullPath = $outputDir . DIRECTORY_SEPARATOR . $name;
+        if (!is_file($fullPath)) {
+            continue;
+        }
+
+        $files[] = [
+            'name' => $name,
+            'path' => $fullPath,
+            'mtime' => filemtime($fullPath),
+            'size' => filesize($fullPath),
+        ];
+    }
+
+    usort($files, function($a, $b) {
+        return $b['mtime'] <=> $a['mtime'];
+    });
+
+    $result['files'] = $files;
+
+    return $result;
+}
+
+function validateFolderPath($requestedPath) {
+    $path = expandAppPath(trim((string)$requestedPath));
+    if ($path === '') {
+        return ['valid' => false, 'path' => '', 'error' => 'Enter a folder path.'];
+    }
+    if (!is_dir($path)) {
+        return ['valid' => false, 'path' => $path, 'error' => 'That folder does not exist or is not accessible.'];
+    }
+    return ['valid' => true, 'path' => $path, 'error' => ''];
+}
+
+// API Router
+if (isset($_GET['action'])) {
+    header('Content-Type: application/json');
+    $action = $_GET['action'];
+    
+    try {
+        if ($action === 'get_config') {
+            echo json_encode(loadAppConfig());
+        } elseif ($action === 'get_repos') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            $systemDirs = resolveSystemDirs($input['system_dirs'] ?? null);
+            $repos = getRepositories($systemDirs);
+            echo json_encode([
+                'repos' => $repos,
+                'system_dirs' => $systemDirs,
+                'output_dir' => loadAppConfig()['output_dir'],
+                'suggested_folders' => loadAppConfig()['suggested_folders'],
+            ]);
+        } elseif ($action === 'detect_common_dirs') {
+            echo json_encode(['dirs' => detectCommonDirs()]);
+        } elseif ($action === 'get_git_identity') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            echo json_encode(getGitIdentity($input));
+        } elseif ($action === 'validate_folder') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            echo json_encode(validateFolderPath($input['path'] ?? ''));
+        } elseif ($action === 'fetch_logs') {
+            $input = json_decode(file_get_contents('php://input'), true);
+            $repos = $input['repos'] ?? [];
+            $since = $input['since'] ?? '';
+            $until = $input['until'] ?? '';
+            $author = trim($input['git_author'] ?? '');
+            $authors = $input['git_authors'] ?? [];
+            if (!is_array($authors) && $author !== '') {
+                $authors = [$author];
+            }
+            $authors = array_values(array_filter(array_map('trim', $authors)));
+            $workMode = $input['work_mode'] ?? 'both';
+            echo json_encode(fetchGitLogs($repos, $since, $until, $authors, $workMode));
+        } elseif ($action === 'generate_report') {
+            $input = json_decode(file_get_contents('php://input'), true);
+            echo json_encode(generateReport($input));
+        } elseif ($action === 'list_output_docs') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            echo json_encode(listOutputDocs($input['output_dir'] ?? null));
+        } else {
+            http_response_code(404);
+            echo json_encode(['error' => 'Action not found']);
+        }
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// Helper: Run Git command
+function runGitCommand($repoPath, $args) {
+    $command = 'git -C ' . escapeshellarg($repoPath) . ' ' . $args;
+    $output = [];
+    $retval = 0;
+    exec($command . ' 2>&1', $output, $retval);
+    return [
+        'success' => ($retval === 0),
+        'output' => implode("\n", $output)
+    ];
+}
+
+// Helper: Extract repository name from remote URL
+function parseRepoOwnerRepo($url) {
+    if (empty($url)) return '';
+    $url = trim($url);
+    // Remove .git suffix
+    if (str_ends_with($url, '.git')) {
+        $url = substr($url, 0, -4);
+    }
+    // Handle SSH and HTTPS urls
+    if (preg_match('/github\.com[:\/](.+)$/i', $url, $matches)) {
+        return $matches[1];
+    }
+    // Fallback: get the last two parts of the path
+    $parts = explode('/', str_replace('\\', '/', $url));
+    if (count($parts) >= 2) {
+        return $parts[count($parts) - 2] . '/' . $parts[count($parts) - 1];
+    }
+    return basename($url);
+}
+
+// Fetch all Git repositories from configured system directories
+function getRepositories($systemDirs = null) {
+    $repos = [];
+    $dirs = resolveSystemDirs($systemDirs);
+
+    foreach ($dirs as $systemDir) {
+        if (!is_dir($systemDir)) {
+            continue;
+        }
+
+        $dirs = scandir($systemDir);
+
+        foreach ($dirs as $dir) {
+            if ($dir === '.' || $dir === '..') continue;
+
+            $fullPath = $systemDir . DIRECTORY_SEPARATOR . $dir;
+            if (!is_dir($fullPath)) continue;
+
+            $gitDir = $fullPath . DIRECTORY_SEPARATOR . '.git';
+            if (!is_dir($gitDir)) continue;
+
+            $branchRes = runGitCommand($fullPath, 'branch --show-current');
+            $branch = $branchRes['success'] ? trim($branchRes['output']) : 'main';
+
+            $remoteRes = runGitCommand($fullPath, 'remote get-url origin');
+            $remoteUrl = $remoteRes['success'] ? trim($remoteRes['output']) : '';
+            $repoName = parseRepoOwnerRepo($remoteUrl);
+
+            $repos[] = [
+                'name' => $dir,
+                'path' => $fullPath,
+                'branch' => $branch,
+                'remote_url' => $remoteUrl,
+                'repo_identifier' => $repoName ? $repoName : $dir,
+                'system_root' => $systemDir,
+            ];
+        }
+    }
+
+    return $repos;
+}
+
+// Note: Template detection is now handled automatically by the Node.js generator script.
+
+// Fetch logs and group modifications by file
+function fetchGitLogs($repos, $since, $until, $authors = [], $workMode = 'both') {
+    $commits = [];
+    $filesMap = [];
+    $inactiveRepos = [];
+    
+    // Format dates for git command
+    $sinceQuery = $since ? $since . ' 00:00:00' : '';
+    $untilQuery = $until ? $until . ' 23:59:59' : '';
+    $includeCommitted = $workMode !== 'uncommitted';
+    $includeUncommittedChanges = $workMode !== 'commits';
+    
+    foreach ($repos as $repo) {
+        $repoPath = $repo['path'];
+        $repoName = $repo['name'];
+        $repoIdent = $repo['repo_identifier'];
+        
+        $hasCommits = false;
+        
+        if ($includeCommitted) {
+            // Command to extract commit log: hash|date|author|message
+            $gitLogArgs = 'log';
+            if ($sinceQuery) $gitLogArgs .= ' --since=' . escapeshellarg($sinceQuery);
+            if ($untilQuery) $gitLogArgs .= ' --until=' . escapeshellarg($untilQuery);
+            foreach ($authors as $authorName) {
+                if ($authorName !== '') {
+                    $gitLogArgs .= ' --author=' . escapeshellarg($authorName);
+                }
+            }
+            $gitLogArgs .= ' --pretty=format:"%H|%ad|%an|%s" --date=short';
+            
+            $logRes = runGitCommand($repoPath, $gitLogArgs);
+            
+            if ($logRes['success'] && !empty(trim($logRes['output']))) {
+                $lines = explode("\n", $logRes['output']);
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (empty($line)) continue;
+                    
+                    // Trim leading/trailing double quotes if any
+                    if (str_starts_with($line, '"') && str_ends_with($line, '"')) {
+                        $line = substr($line, 1, -1);
+                    }
+                    
+                    $parts = explode('|', $line, 4);
+                    if (count($parts) === 4) {
+                        $commits[] = [
+                            'hash' => $parts[0],
+                            'date' => $parts[1],
+                            'author' => $parts[2],
+                            'message' => $parts[3],
+                            'repo' => $repoName
+                        ];
+                        $hasCommits = true;
+                    }
+                }
+            }
+        }
+        
+        // Fetch local uncommitted changes
+        $today = date('Y-m-d');
+        $shouldScanStatus = $includeUncommittedChanges && (
+            $workMode === 'uncommitted' ||
+            ((empty($since) || $since <= $today) && (empty($until) || $until >= $today))
+        );
+        $uncommittedFiles = [];
+        $mockHash = 'uncommitted_' . $repoName;
+        
+        if ($shouldScanStatus) {
+            $statusRes = runGitCommand($repoPath, 'status --porcelain');
+            if ($statusRes['success'] && !empty(trim($statusRes['output']))) {
+                $statusLines = explode("\n", $statusRes['output']);
+                foreach ($statusLines as $sLine) {
+                    $sLine = trim($sLine);
+                    if (empty($sLine)) continue;
+                    
+                    $statusCode = substr($sLine, 0, 2);
+                    $filePath = trim(substr($sLine, 2));
+                    
+                    if (str_contains($filePath, ' -> ')) {
+                        $parts = explode(' -> ', $filePath);
+                        $filePath = trim(end($parts));
+                    }
+                    
+                    $fileExt = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+                    if (str_contains($filePath, 'vendor/') || 
+                        str_contains($filePath, 'node_modules/') || 
+                        str_contains($filePath, 'composer.lock') || 
+                        str_contains($filePath, 'package-lock.json') ||
+                        str_contains($filePath, '.git') ||
+                        in_array($fileExt, ['png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp', 'bmp', 'tiff', 'woff', 'woff2', 'ttf', 'eot', 'otf', 'mp4', 'mp3', 'wav', 'zip', 'tar', 'gz', 'rar', '7z', 'pdf', 'docx', 'xlsx', 'pptx'])) {
+                        continue;
+                    }
+                    
+                    $uncommittedFiles[] = [
+                        'file' => $filePath,
+                        'status' => $statusCode
+                    ];
+                }
+                
+                if (!empty($uncommittedFiles)) {
+                    $commits[] = [
+                        'hash' => $mockHash,
+                        'date' => $today,
+                        'author' => 'Local Workspace',
+                        'message' => 'Uncommitted Changes (Work in Progress)',
+                        'repo' => $repoName
+                    ];
+                    $hasCommits = true;
+                }
+            }
+        }
+        
+        if (!$hasCommits) {
+            $inactiveRepos[] = $repoName;
+        }
+        
+        if ($includeCommitted) {
+            // Command to extract modified files and their modifications
+            $fileLogArgs = 'log';
+            if ($sinceQuery) $fileLogArgs .= ' --since=' . escapeshellarg($sinceQuery);
+            if ($untilQuery) $fileLogArgs .= ' --until=' . escapeshellarg($untilQuery);
+            foreach ($authors as $authorName) {
+                if ($authorName !== '') {
+                    $fileLogArgs .= ' --author=' . escapeshellarg($authorName);
+                }
+            }
+            $fileLogArgs .= ' --name-status --pretty=format:"COMMIT:%H|%s"';
+            
+            $fileRes = runGitCommand($repoPath, $fileLogArgs);
+            
+            if ($fileRes['success'] && !empty(trim($fileRes['output']))) {
+                $lines = explode("\n", $fileRes['output']);
+                $currentCommitHash = '';
+                $currentCommitMsg = '';
+                
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (empty($line)) continue;
+                    
+                    if (str_starts_with($line, 'COMMIT:')) {
+                        $commitData = substr($line, 7);
+                        $parts = explode('|', $commitData, 2);
+                        $currentCommitHash = $parts[0] ?? '';
+                        $currentCommitMsg = $parts[1] ?? '';
+                    } elseif ($currentCommitMsg !== '') {
+                        // This is a file status line, e.g. "M\tindex.html" or "A  src/main.js"
+                        // Status is letter, followed by whitespace, then file path
+                        if (preg_match('/^([AMDR])\s+(.+)$/', $line, $matches)) {
+                            $status = $matches[1];
+                            $filePath = $matches[2];
+                            
+                            // Ignore standard system, vendor, or binary asset files to keep report clean
+                            $fileExt = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+                            if (str_contains($filePath, 'vendor/') || 
+                                str_contains($filePath, 'node_modules/') || 
+                                str_contains($filePath, 'composer.lock') || 
+                                str_contains($filePath, 'package-lock.json') ||
+                                str_contains($filePath, '.git') ||
+                                in_array($fileExt, ['png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp', 'bmp', 'tiff', 'woff', 'woff2', 'ttf', 'eot', 'otf', 'mp4', 'mp3', 'wav', 'zip', 'tar', 'gz', 'rar', '7z', 'pdf', 'docx', 'xlsx', 'pptx'])) {
+                                continue;
+                            }
+                            
+                            $fileKey = $repoName . ':' . $filePath;
+                            
+                            if (!isset($filesMap[$fileKey])) {
+                                $filesMap[$fileKey] = [
+                                    'file' => $filePath,
+                                    'repo' => $repoName,
+                                    'status' => $status,
+                                    'modifications' => []
+                                ];
+                            }
+                            
+                            // Add modification message if it's not already added
+                            $found = false;
+                            foreach ($filesMap[$fileKey]['modifications'] as $mod) {
+                                if ($mod['hash'] === $currentCommitHash) {
+                                    $found = true;
+                                    break;
+                                }
+                            }
+                            if (!$found) {
+                                $filesMap[$fileKey]['modifications'][] = [
+                                    'hash' => $currentCommitHash,
+                                    'message' => $currentCommitMsg
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Append uncommitted files to filesMap
+        if (!empty($uncommittedFiles)) {
+            foreach ($uncommittedFiles as $uf) {
+                $filePath = $uf['file'];
+                $statusRaw = trim($uf['status']);
+                
+                $status = 'M';
+                $desc = 'Modified and updated application logic.';
+                
+                if (str_contains($statusRaw, '?') || str_contains($statusRaw, 'A')) {
+                    $status = 'A';
+                    $desc = 'Created new file and implemented initial structure.';
+                } elseif (str_contains($statusRaw, 'D')) {
+                    $status = 'D';
+                    $desc = 'Deleted file from repository.';
+                } elseif (str_contains($statusRaw, 'R')) {
+                    $status = 'M';
+                    $desc = 'Renamed/moved file and refined content.';
+                }
+                
+                $fileKey = $repoName . ':' . $filePath;
+                if (!isset($filesMap[$fileKey])) {
+                    $filesMap[$fileKey] = [
+                        'file' => $filePath,
+                        'repo' => $repoName,
+                        'status' => $status,
+                        'modifications' => []
+                    ];
+                }
+                
+                $filesMap[$fileKey]['modifications'][] = [
+                    'hash' => $mockHash,
+                    'message' => $desc
+                ];
+            }
+        }
+    }
+    
+    // Convert filesMap to flat array
+    $files = [];
+    foreach ($filesMap as $k => $v) {
+        // Group modification array into bullet points or comma separated string
+        $v['modifications_text'] = implode("\n", array_map(function($mod) {
+            return '• ' . $mod['message'];
+        }, $v['modifications']));
+        
+        // Define default UX impact based on status and file type
+        $fileExt = pathinfo($v['file'], PATHINFO_EXTENSION);
+        $impact = 'Improves application structure and code organization.';
+        if ($v['status'] === 'A') {
+            $impact = 'Establishes new system components and expands application feature set.';
+        } elseif (in_array($fileExt, ['css', 'scss'])) {
+            $impact = 'Refines user interface style, consistency, and responsive layouts.';
+        } elseif (in_array($fileExt, ['js', 'ts'])) {
+            $impact = 'Enhances interactive UI controls, validation, and event handling.';
+        } elseif (in_array($fileExt, ['php', 'py', 'java'])) {
+            $impact = 'Optimizes backend business logic, API requests, and data security.';
+        } elseif (in_array($fileExt, ['sql'])) {
+            $impact = 'Updates database schema and structures core system tables.';
+        }
+        $v['impact'] = $impact;
+        $files[] = $v;
+    }
+    
+    // Sort files by repository and then by file name
+    usort($files, function($a, $b) {
+        if ($a['repo'] === $b['repo']) {
+            return strcmp($a['file'], $b['file']);
+        }
+        return strcmp($a['repo'], $b['repo']);
+    });
+    
+    return [
+        'commits' => $commits,
+        'files' => $files,
+        'inactive_repos' => $inactiveRepos
+    ];
+}// Generate the final DOCX Accomplishment Report using Node.js script
+function generateReport($data) {
+    $data['output_dir'] = resolveOutputDir($data['output_dir'] ?? null);
+    // Generate temp file name
+    $tempFile = tempnam(sys_get_temp_dir(), 'arg_');
+    file_put_contents($tempFile, json_encode($data));
+    
+    // Execute Node.js script
+    $command = 'node ' . escapeshellarg(__DIR__ . DIRECTORY_SEPARATOR . 'generator.js') . ' ' . escapeshellarg($tempFile);
+    
+    $output = [];
+    $retval = 0;
+    exec($command . ' 2>&1', $output, $retval);
+    
+    // Delete temp file
+    if (file_exists($tempFile)) {
+        unlink($tempFile);
+    }
+    
+    $outText = implode("\n", $output);
+    $result = json_decode($outText, true);
+    
+    if ($retval !== 0 || !$result || !$result['success']) {
+        $err = ($result && isset($result['error'])) ? $result['error'] : $outText;
+        throw new Exception("Node.js DOCX Generation Failed: " . $err);
+    }
+    
+    return $result;
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ARB Accomplishment Report Builder — generate developer accomplishment reports from Git logs.">
+    <title>ARB Accomplishment Report Builder</title>
+    <link rel="icon" type="image/png" href="assets/arb-logo.png">
+    <link rel="apple-touch-icon" href="assets/arb-logo.png">
+    <!-- Google Fonts: Plus Jakarta Sans + Playfair Display -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+    <!-- FontAwesome for beautiful icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom styling -->
+    <link rel="stylesheet" href="css/style.css">
+    <script>window.ARG_API_BASE = "";</script>
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Sidebar Configuration panel -->
+        <aside class="sidebar" id="app-sidebar">
+            <div class="brand">
+                <div class="brand-logo-wrap brand-logo-wrap--circle">
+                    <img src="assets/arb-logo.png" alt="" class="brand-logo" width="64" height="64">
+                </div>
+                <p class="brand-name">Accomplishment Report Builder</p>
+            </div>
+            
+            <form id="config-form" class="sidebar-form">
+                <input type="hidden" id="developer-name">
+                <input type="hidden" id="job-title">
+                <input type="hidden" id="project-title">
+
+                <div class="sidebar-form-scroll">
+                    <div class="form-section sidebar-settings-summary" id="sidebar-settings-summary">
+                        <div id="settings-profile-card" class="settings-profile-card">
+                            <div id="settings-avatar" class="settings-avatar" aria-hidden="true">?</div>
+                            <div class="settings-profile-text">
+                                <span id="settings-profile-name" class="settings-profile-name">Your profile</span>
+                                <span id="settings-profile-meta" class="settings-profile-meta">Complete setup to begin</span>
+                            </div>
+                        </div>
+                        <div id="settings-summary-content" class="settings-summary-content" hidden></div>
+                    </div>
+
+                    <div class="form-section form-section-dates">
+                        <h3><i class="fa-solid fa-calendar-days"></i> Date Range</h3>
+                        <div class="date-presets" role="group" aria-label="Quick date ranges">
+                            <button type="button" class="date-preset-chip" data-preset="today">Today</button>
+                            <button type="button" class="date-preset-chip" data-preset="week">This week</button>
+                            <button type="button" class="date-preset-chip" data-preset="month">This month</button>
+                            <button type="button" class="date-preset-chip" data-preset="last30">Last 30 days</button>
+                        </div>
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label for="date-since">Since</label>
+                                <input type="date" id="date-since" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="date-until">Until</label>
+                                <input type="date" id="date-until" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section form-section-repos">
+                        <h3><i class="fa-solid fa-cubes"></i> Select Systems</h3>
+                        <div class="repos-list-container">
+                            <input type="search" id="repo-search-input" class="repo-search-input" placeholder="Search repositories…" autocomplete="off" spellcheck="false" hidden>
+                            <div class="repos-select-all">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="select-all-repos">
+                                    <span class="checkmark"></span>
+                                    Select All Repositories
+                                </label>
+                            </div>
+                            <div id="repos-checkboxes" class="repos-checkboxes">
+                                <div class="loading-spinner-small"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" id="fetch-logs-btn" class="btn btn-primary btn-block">
+                    <i class="fa-solid fa-sync"></i> Fetch Git Logs
+                </button>
+                <p id="last-fetch-hint" class="last-fetch-hint" hidden></p>
+            </form>
+            
+            <div class="sidebar-footer">
+                <p>ARB · Build • Track • Report • Achieve</p>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- Header bar -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h1>Accomplishment Report Builder</h1>
+                    <p>Pick dates and repos in the sidebar, fetch logs, then generate your report.</p>
+                </div>
+                <div class="header-status">
+                    <button type="button" id="theme-toggle" class="theme-icon-toggle" aria-label="Toggle theme" aria-pressed="true">
+                        <span class="theme-icon-track">
+                            <i class="fa-solid fa-sun theme-icon theme-icon-sun" aria-hidden="true"></i>
+                            <i class="fa-solid fa-moon theme-icon theme-icon-moon" aria-hidden="true"></i>
+                        </span>
+                    </button>
+                    <button type="button" id="settings-btn" class="settings-header-btn" aria-label="Open settings" title="Settings" hidden>
+                        <i class="fa-solid fa-gear"></i>
+                        <span>Settings</span>
+                    </button>
+                    <div class="status-badge" id="header-status-badge">
+                        <span class="pulse-dot" id="header-status-dot"></span>
+                        <span id="header-status-text">Loading…</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Working Area -->
+            <div class="workspace-area">
+                <div id="empty-state" class="empty-state">
+                    <div class="empty-icon empty-icon-logo">
+                        <img src="assets/arb-logo.png" alt="ARB" class="empty-state-logo" width="160" height="160">
+                    </div>
+                    <h2>No git data yet</h2>
+                    <p id="empty-state-hint" class="empty-state-lead">Set your date range and repositories in the sidebar, then click <strong>Fetch Git Logs</strong>.</p>
+                </div>
+
+                <!-- Main editor workspace (hidden until logs are fetched) -->
+                <div id="editor-workspace" class="editor-workspace" style="display: none;">
+                    
+                    <!-- Commits Checklist -->
+                    <section class="editor-card">
+                        <div class="card-header">
+                            <div class="header-left">
+                                <i class="fa-solid fa-code-commit text-primary"></i>
+                                <h2>Git Commits Checklist</h2>
+                            </div>
+                            <div class="header-right">
+                                <span id="commits-count" class="badge">0 Commits Found</span>
+                            </div>
+                        </div>
+                        <div class="card-body scroll-y max-h-300">
+                            <div class="commits-select-all">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="select-all-commits" checked>
+                                    <span class="checkmark"></span>
+                                    Toggle All Commits
+                                </label>
+                            </div>
+                            <div id="commits-list" class="commits-list">
+                                <!-- Populated dynamically by JS -->
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Report Content Sections -->
+                    <section class="editor-card mt-24" id="report-sections-card">
+                        <div class="card-header border-bottom">
+                            <div class="header-left">
+                                <i class="fa-solid fa-pen-to-square text-success"></i>
+                                <h2>Report Sections Draft</h2>
+                            </div>
+                            <p class="subtitle">Edit the draft below before generating your DOCX.</p>
+                        </div>
+                        
+                        <div class="card-body">
+                            <div class="editor-field-group">
+                                <div class="field-label-row">
+                                    <label class="field-label" for="field-executive-summary">1. Executive Summary</label>
+                                    <button type="button" class="btn btn-text btn-regenerate" data-field="executive_summary">
+                                        <i class="fa-solid fa-wand-magic-sparkles"></i> Regenerate
+                                    </button>
+                                </div>
+                                <textarea id="field-executive-summary" class="field-textarea" rows="8" placeholder="Brief summary of work done during the period..."></textarea>
+                            </div>
+
+                            <div class="editor-field-group mt-24">
+                                <label class="field-label" for="field-key-accomplishments">2. Key Accomplishments &amp; Technical Enhancements</label>
+                                <textarea id="field-key-accomplishments" class="field-textarea" rows="6" placeholder="Bullet points of accomplishments (one per line, format: 'Title: Detail explanation')"></textarea>
+                            </div>
+
+                            <div class="editor-field-group mt-24">
+                                <div class="field-header-row field-header-row-stacked">
+                                    <label class="field-label">3. Detailed File Adjustments &amp; Code Changes</label>
+                                    <div class="field-header-actions">
+                                        <div class="file-section-mode" role="radiogroup" aria-label="File section display mode">
+                                            <span class="file-section-mode-label">View</span>
+                                            <label class="mode-option">
+                                                <input type="radio" name="file-section-mode" value="full">
+                                                <span>Full</span>
+                                            </label>
+                                            <label class="mode-option">
+                                                <input type="radio" name="file-section-mode" value="compact" checked>
+                                                <span>Compact</span>
+                                            </label>
+                                            <label class="mode-option">
+                                                <input type="radio" name="file-section-mode" value="summary">
+                                                <span>Summary Only</span>
+                                            </label>
+                                        </div>
+                                        <span class="file-sort-label" id="file-sort-label">Sorted A–Z by file path</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="table-container mt-12">
+                                    <table class="grid-table" id="file-changes-table">
+                                        <thead>
+                                            <tr>
+                                                <th width="35%">File Affected</th>
+                                                <th width="65%">Modifications Made</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="file-changes-tbody">
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="table-pagination" id="file-table-pagination" hidden>
+                                    <span class="pagination-info" id="file-table-pagination-info"></span>
+                                    <div class="pagination-controls">
+                                        <button type="button" id="file-table-prev" class="btn btn-secondary btn-sm" disabled>
+                                            <i class="fa-solid fa-chevron-left"></i> Prev
+                                        </button>
+                                        <span class="pagination-page-label" id="file-table-page-label">Page 1 of 1</span>
+                                        <button type="button" id="file-table-next" class="btn btn-secondary btn-sm" disabled>
+                                            Next <i class="fa-solid fa-chevron-right"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="editor-field-group mt-24">
+                                <div class="field-label-row">
+                                    <label class="field-label" for="field-impact-verification">4. Impact and Verification</label>
+                                    <button type="button" class="btn btn-text btn-regenerate" data-field="impact_verification">
+                                        <i class="fa-solid fa-wand-magic-sparkles"></i> Regenerate
+                                    </button>
+                                </div>
+                                <textarea id="field-impact-verification" class="field-textarea" rows="4" placeholder="Bullet points of verification metrics/actions (one per line, format: 'Verification Area: Description')"></textarea>
+                            </div>
+
+                            <div class="editor-field-group mt-24">
+                                <label class="field-label" for="field-verification-status">5. Verification Status</label>
+                                <textarea id="field-verification-status" class="field-textarea" rows="3" placeholder="Statements regarding staging deployments, lint checks, build checks..."></textarea>
+                            </div>
+                        </div>
+
+                        <div class="card-footer border-top">
+                            <div class="export-meta">
+                                <div class="meta-item">
+                                    <span class="meta-label">Report Template:</span>
+                                    <select id="report-template-select" class="report-template-select" aria-label="Report template">
+                                        <option value="default">Default (5-section)</option>
+                                        <option value="acts">ACTS Colleges (Extended)</option>
+                                    </select>
+                                </div>
+                                <div class="meta-item acts-template-meta" id="acts-template-meta" hidden>
+                                    <span class="meta-label">ACTS Environment:</span>
+                                    <input type="text" id="acts-environment" class="acts-meta-input" placeholder="e.g. Laragon (PHP 8.3, MySQL)">
+                                </div>
+                                <div class="meta-item acts-template-meta" hidden>
+                                    <span class="meta-label">ACTS System Phase:</span>
+                                    <input type="text" id="acts-system-phase" class="acts-meta-input" placeholder="e.g. Student Portal Backend, SSOT, Audit">
+                                </div>
+                                <div class="meta-item acts-template-meta" hidden>
+                                    <span class="meta-label">ACTS Status:</span>
+                                    <input type="text" id="acts-status" class="acts-meta-input" placeholder="e.g. Completed / For Continued Validation">
+                                </div>
+                                <div class="meta-item">
+                                    <span class="meta-label">Branch/Repo Text:</span>
+                                    <span id="meta-branches-display" class="meta-value">-</span>
+                                </div>
+                                <div class="meta-item">
+                                    <span class="meta-label">Output Directory:</span>
+                                    <span id="meta-output-dir" class="meta-value">Documents\Accomplishment Reports</span>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <div id="report-output-preview" class="visually-hidden" aria-hidden="true">
+                    <span id="preview-filename"></span>
+                    <span id="preview-path"></span>
+                    <span id="preview-template"></span>
+                    <p id="preview-warning" hidden></p>
+                    <ul id="preview-sections"></ul>
+                </div>
+
+                <div id="sticky-generate-bar" class="sticky-generate-bar" hidden>
+                    <div class="sticky-generate-meta">
+                        <span id="sticky-filename" class="sticky-filename">—</span>
+                        <span id="sticky-commits-meta" class="sticky-commits-meta">0 commits selected</span>
+                        <span id="sticky-template-meta" class="sticky-template-meta">Default template</span>
+                        <span id="sticky-output-hint" class="sticky-output-hint" hidden></span>
+                    </div>
+                    <button type="button" id="generate-report-btn" class="btn btn-success btn-lg" disabled>
+                        <i class="fa-solid fa-file-word"></i> Generate DOCX Report
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- First-run Setup Wizard -->
+    <div id="setup-wizard" class="setup-wizard" hidden>
+        <div class="setup-wizard-backdrop"></div>
+        <div class="setup-wizard-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-wizard-title">
+            <div class="setup-wizard-header">
+                <img src="assets/arb-logo.png" alt="" class="setup-wizard-logo" width="120" height="120">
+                <h2 id="setup-wizard-title">Welcome — Quick Setup</h2>
+                <p class="setup-wizard-subtitle">Configure your profile and project folders to get started.</p>
+            </div>
+            <div class="setup-wizard-steps">
+                <span class="setup-step-indicator active" data-step="1">1. Profile</span>
+                <span class="setup-step-indicator" data-step="2">2. Git Identity</span>
+                <span class="setup-step-indicator" data-step="3">3. Folders</span>
+            </div>
+            <div class="setup-wizard-body">
+                <div class="setup-step" data-step="1">
+                    <div class="form-group">
+                        <label for="setup-dev-name">Developer Name</label>
+                        <input type="text" id="setup-dev-name" placeholder="Last Name, First Name">
+                    </div>
+                    <div class="form-group">
+                        <label for="setup-job-title">Job Title</label>
+                        <input type="text" id="setup-job-title" placeholder="e.g. Software Developer">
+                    </div>
+                    <div class="form-group">
+                        <label for="setup-project-title">Default Project Title</label>
+                        <input type="text" id="setup-project-title" placeholder="e.g. Internal Systems">
+                    </div>
+                </div>
+                <div class="setup-step" data-step="2" hidden>
+                    <p class="help-text">Enter the git username that appears in your commit history. Use Detect to read from git config.</p>
+                    <div class="form-group">
+                        <label for="setup-git-author-input">Git Username</label>
+                        <div class="git-author-add-row">
+                            <input type="text" id="setup-git-author-input" placeholder="e.g. Hdjrz1">
+                            <button type="button" id="setup-detect-git-author-btn" class="btn btn-secondary btn-sm" title="Detect from git config">
+                                <i class="fa-solid fa-magnifying-glass"></i> Detect
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group mt-12">
+                        <label>Work to Include</label>
+                        <div class="work-mode-options" role="radiogroup">
+                            <label class="mode-option">
+                                <input type="radio" name="setup-work-mode" value="both" checked>
+                                <span>Commits + Uncommitted</span>
+                            </label>
+                            <label class="mode-option">
+                                <input type="radio" name="setup-work-mode" value="commits">
+                                <span>Commits Only</span>
+                            </label>
+                            <label class="mode-option">
+                                <input type="radio" name="setup-work-mode" value="uncommitted">
+                                <span>Uncommitted Only</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="setup-step" data-step="3" hidden>
+                    <p class="setup-folders-intro help-text">Folders where git repositories are scanned.</p>
+
+                    <div class="setup-folders-block">
+                        <span class="setup-section-label">Configured folders</span>
+                        <div id="setup-system-dirs-list" class="system-dirs-list setup-folders-list"></div>
+                    </div>
+
+                    <div class="setup-folders-block">
+                        <label class="setup-section-label" for="setup-folder-path-input">Add folder</label>
+                        <div class="system-dir-add-row">
+                            <input type="text" id="setup-folder-path-input" class="setup-folder-path-input" placeholder="Paste folder path (e.g. C:\ACTS SYSTEM)" autocomplete="off" spellcheck="false">
+                            <button type="button" id="setup-add-folder-path-btn" class="btn btn-primary">Add</button>
+                        </div>
+                        <div class="folder-picker-actions">
+                            <button type="button" id="setup-browse-folder-btn" class="btn btn-secondary btn-browse-folder">
+                                <i class="fa-solid fa-folder-open" aria-hidden="true"></i> Browse folder
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="setup-suggested-section" class="setup-folders-block setup-suggested-section" hidden>
+                        <span class="setup-section-label">Suggested</span>
+                        <div id="setup-suggested-folders" class="suggested-folders"></div>
+                    </div>
+
+                </div>
+            </div>
+            <div class="setup-wizard-footer">
+                <button type="button" id="setup-cancel-btn" class="btn btn-secondary wizard-cancel-btn" hidden>Cancel</button>
+                <div class="setup-wizard-footer-actions">
+                    <button type="button" id="setup-back-btn" class="btn btn-secondary" hidden>Back</button>
+                    <button type="button" id="setup-next-btn" class="btn btn-primary">Next</button>
+                    <button type="button" id="setup-finish-btn" class="btn btn-success" hidden>Finish Setup</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast">
+        <i class="toast-icon fa-solid fa-circle-check"></i>
+        <div class="toast-body">
+            <h4 class="toast-title">Success</h4>
+            <p class="toast-msg">Operation completed successfully.</p>
+        </div>
+    </div>
+
+    <!-- Script file -->
+    <script src="js/app.js"></script>
+</body>
+</html>

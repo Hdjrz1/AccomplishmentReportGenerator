@@ -1,0 +1,11 @@
+{
+  "system_dirs": [],
+  "suggested_folders": [
+    "C:\\laragon\\www",
+    "C:\\xampp\\htdocs",
+    "C:\\ACTS SYSTEM",
+    "%USERPROFILE%\\Documents\\Projects",
+    "%USERPROFILE%\\source\\repos"
+  ],
+  "output_dir": "%USERPROFILE%\\Documents\\Accomplishment Reports"
+}
