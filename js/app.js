@@ -35,6 +35,89 @@ async function apiFetch(action, options = {}) {
     return { response, data };
 }
 
+async function fetchPreviewDocBlob(previewId) {
+    const url = new URL(apiUrl('get_preview_report'));
+    url.searchParams.set('preview_id', previewId);
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+        let message = `Failed to load preview (${response.status})`;
+        try {
+            const err = await response.json();
+            if (err.error) message = err.error;
+        } catch {
+            // binary response
+        }
+        throw new Error(message);
+    }
+    return response.blob();
+}
+
+let appConfirmActive = false;
+let appConfirmFinish = null;
+
+function closeAppConfirm(result) {
+    const dialog = document.getElementById('app-confirm-dialog');
+    if (!dialog || !appConfirmActive) return;
+
+    appConfirmActive = false;
+    dialog.classList.remove('is-open');
+    document.body.classList.remove('app-confirm-open');
+
+    const finish = appConfirmFinish;
+    appConfirmFinish = null;
+
+    window.setTimeout(() => {
+        if (dialog.hidden === false) dialog.hidden = true;
+        finish?.(result);
+    }, 220);
+}
+
+function showConfirm(options = {}) {
+    return new Promise((resolve) => {
+        const dialog = document.getElementById('app-confirm-dialog');
+        const titleEl = document.getElementById('app-confirm-title');
+        const messageEl = document.getElementById('app-confirm-message');
+        const okBtn = document.getElementById('app-confirm-ok');
+        const cancelBtn = document.getElementById('app-confirm-cancel');
+        const backdrop = dialog?.querySelector('.app-confirm-backdrop');
+
+        if (!dialog || !titleEl || !messageEl || !okBtn || !cancelBtn) {
+            resolve(window.confirm(options.message || options.title || 'Are you sure?'));
+            return;
+        }
+
+        if (appConfirmActive) {
+            closeAppConfirm(false);
+        }
+
+        titleEl.textContent = options.title || 'Are you sure?';
+        messageEl.textContent = options.message || '';
+        okBtn.textContent = options.confirmLabel || 'Confirm';
+        cancelBtn.textContent = options.cancelLabel || 'Cancel';
+
+        const danger = options.variant !== 'primary';
+        okBtn.classList.toggle('btn-danger', danger);
+        okBtn.classList.toggle('btn-primary', !danger);
+
+        appConfirmActive = true;
+        appConfirmFinish = resolve;
+
+        okBtn.onclick = () => closeAppConfirm(true);
+        cancelBtn.onclick = () => closeAppConfirm(false);
+        if (backdrop) backdrop.onclick = () => closeAppConfirm(false);
+
+        dialog.hidden = false;
+        document.body.classList.add('app-confirm-open');
+        requestAnimationFrame(() => dialog.classList.add('is-open'));
+        cancelBtn.focus();
+    });
+}
+
+document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !appConfirmActive) return;
+    closeAppConfirm(false);
+});
+
 document.addEventListener('DOMContentLoaded', () => {
     // State Variables
     let repositories = [];
@@ -44,6 +127,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastFetchedRepos = [];
     let logsFetched = false;
     let isGeneratingReport = false;
+    let pendingPreviewReport = null;
+    let isConfirmingPreview = false;
+    let reportPreviewZoom = 1;
+    let reportPreviewZoomMode = 'fit';
+    const REPORT_PREVIEW_CONFIRM_BTN_HTML = '<i class="fa-solid fa-floppy-disk"></i> Save to Documents';
     
     // UI Elements
     const themeToggle = document.getElementById('theme-toggle');
@@ -154,6 +242,21 @@ document.addEventListener('DOMContentLoaded', () => {
     let fileTableCurrentPage = 1;
     const generateReportBtn = document.getElementById('generate-report-btn');
     const fetchLogsBtn = document.getElementById('fetch-logs-btn');
+    const reportPreviewModal = document.getElementById('report-preview-modal');
+    const reportPreviewDoc = document.getElementById('report-preview-doc');
+    const reportPreviewTitle = document.getElementById('report-preview-title');
+    const reportPreviewStats = document.getElementById('report-preview-stats');
+    const reportPreviewFilename = document.getElementById('report-preview-filename');
+    const reportPreviewFolder = document.getElementById('report-preview-folder');
+    const reportPreviewPath = document.getElementById('report-preview-path');
+    const reportPreviewLoading = document.getElementById('report-preview-loading');
+    const reportPreviewViewport = document.querySelector('.report-preview-viewport');
+    const reportPreviewZoomLabel = document.getElementById('report-preview-zoom-label');
+    const reportPreviewCopyPathBtn = document.getElementById('report-preview-copy-path-btn');
+    const reportPreviewBackBtn = document.getElementById('report-preview-back-btn');
+    const reportPreviewConfirmBtn = document.getElementById('report-preview-confirm-btn');
+    const reportPreviewCloseBtn = document.getElementById('report-preview-close-btn');
+    const reportPreviewZoomButtons = document.querySelectorAll('.report-preview-zoom-btn');
 
     let outputDocsCache = null;
     let outputDocsCacheKey = '';
@@ -321,8 +424,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setGenerateButtonBusy(isBusy) {
         isGeneratingReport = isBusy;
-        const idleHtml = '<i class="fa-solid fa-file-word"></i> Generate DOCX Report';
-        const busyHtml = '<i class="fa-solid fa-spinner fa-spin"></i> Writing DOCX Report...';
+        const idleHtml = '<i class="fa-solid fa-eye"></i> Preview Report';
+        const busyHtml = '<i class="fa-solid fa-spinner fa-spin"></i> Building Preview...';
 
         if (!generateReportBtn) return;
         if (isBusy) {
@@ -1794,7 +1897,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (!info.dir_exists) {
                     previewWarning.classList.add('is-warn');
                     hintText = 'Output folder will be created on generate.';
-                    previewWarning.textContent = 'The output folder will be created when you generate, if the path is valid.';
+                    previewWarning.textContent = 'The output folder will be created when you save the report, if the path is valid.';
                 } else if (exists) {
                     previewWarning.classList.add('is-warn');
                     hintText = 'Existing file will be overwritten.';
@@ -2465,14 +2568,8 @@ document.addEventListener('DOMContentLoaded', () => {
         handleRegenerateField(btn.dataset.field);
     });
     
-    // Submit/Generate DOCX report action
-    async function generateReport() {
-        const readiness = getGenerateReadiness();
-        if (!readiness.canGenerate) {
-            showToast('Cannot Generate', readiness.reason, 'warning');
-            return;
-        }
-
+    // Submit/Preview DOCX report action
+    function buildReportPayload() {
         const devName = devNameInput.value.trim();
         const jobTitle = jobTitleInput.value.trim();
         const projTitle = projTitleInput.value.trim();
@@ -2489,74 +2586,375 @@ document.addEventListener('DOMContentLoaded', () => {
         const impactVerificationVal = fieldImpactVerification.value.trim().split('\n').filter(l => l.trim() !== '');
         const verificationStatusVal = fieldVerificationStatus.value.trim();
 
+        return {
+            template_id: getReportTemplateId(),
+            developer_name: devName,
+            job_title: jobTitle,
+            project_title: projTitle,
+            date_range_text: dateRangeStr,
+            branches_text: branchesTextStr,
+            executive_summary: execSummaryVal,
+            key_accomplishments: keyAccomplishmentsVal,
+            detailed_files: fileRows,
+            file_section_mode: getFileSectionMode(),
+            impact_verification: impactVerificationVal,
+            verification_status: verificationStatusVal,
+            commit_count: activeCommits.length,
+            file_count: fileRows.length,
+            repo_count: repoCount,
+            report_status: 'On Track / For Review',
+            generated_date: new Date().toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            }),
+            acts_environment: actsEnvironmentInput?.value.trim() || '',
+            acts_system_phase: actsSystemPhaseInput?.value.trim() || '',
+            acts_status: actsStatusInput?.value.trim() || '',
+            output_dir: outputDir
+        };
+    }
+
+    function splitSavePath(fullPath) {
+        if (!fullPath) {
+            return { folder: '—', file: '—' };
+        }
+        const normalized = String(fullPath).replace(/\//g, '\\');
+        const lastSep = normalized.lastIndexOf('\\');
+        if (lastSep === -1) {
+            return { folder: '—', file: normalized };
+        }
+        return {
+            folder: normalized.slice(0, lastSep),
+            file: normalized.slice(lastSep + 1)
+        };
+    }
+
+    function resetReportPreviewZoom() {
+        reportPreviewZoom = 1;
+        reportPreviewZoomMode = 'fit';
+        reportPreviewZoomButtons.forEach((btn) => {
+            btn.classList.toggle('is-active', btn.dataset.zoom === 'fit');
+        });
+        if (reportPreviewZoomLabel) {
+            reportPreviewZoomLabel.textContent = 'Fit width';
+        }
+    }
+
+    function getReportPreviewWrapper() {
+        return reportPreviewDoc?.querySelector('.docx-wrapper') || null;
+    }
+
+    function updatePreviewZoomLabel() {
+        if (!reportPreviewZoomLabel) return;
+        if (reportPreviewZoomMode === 'fit') {
+            reportPreviewZoomLabel.textContent = 'Fit width';
+            return;
+        }
+        reportPreviewZoomLabel.textContent = `${Math.round(reportPreviewZoom * 100)}%`;
+    }
+
+    function applyReportPreviewZoom(mode) {
+        const wrapper = getReportPreviewWrapper();
+        if (!wrapper || !reportPreviewViewport) return;
+
+        reportPreviewZoomMode = mode;
+
+        if (mode === 'fit') {
+            const avail = Math.max(reportPreviewViewport.clientWidth - 56, 320);
+            const natural = wrapper.offsetWidth || wrapper.scrollWidth || avail;
+            reportPreviewZoom = Math.min(1, Math.max(0.45, avail / natural));
+        } else if (mode === '100') {
+            reportPreviewZoom = 1;
+        } else if (mode === 'in') {
+            reportPreviewZoom = Math.min(2, reportPreviewZoom + 0.1);
+            reportPreviewZoomMode = 'custom';
+        } else if (mode === 'out') {
+            reportPreviewZoom = Math.max(0.45, reportPreviewZoom - 0.1);
+            reportPreviewZoomMode = 'custom';
+        }
+
+        wrapper.style.transform = `scale(${reportPreviewZoom})`;
+        wrapper.style.transformOrigin = 'top center';
+
+        const scaledHeight = (wrapper.offsetHeight || wrapper.scrollHeight) * reportPreviewZoom;
+        reportPreviewDoc.style.minHeight = `${Math.ceil(scaledHeight + 32)}px`;
+
+        reportPreviewZoomButtons.forEach((btn) => {
+            const isPreset = btn.dataset.zoom === 'fit' || btn.dataset.zoom === '100';
+            btn.classList.toggle('is-active', isPreset && btn.dataset.zoom === mode);
+        });
+
+        updatePreviewZoomLabel();
+    }
+
+    function setReportPreviewLoading(isLoading) {
+        if (reportPreviewLoading) {
+            reportPreviewLoading.hidden = !isLoading;
+        }
+        if (reportPreviewDoc) {
+            reportPreviewDoc.classList.toggle('is-loading', isLoading);
+        }
+    }
+
+    async function renderReportPreview(blob) {
+        if (!reportPreviewDoc) return;
+
+        setReportPreviewLoading(true);
+        reportPreviewDoc.innerHTML = '';
+        resetReportPreviewZoom();
+
+        if (typeof docx === 'undefined' || typeof docx.renderAsync !== 'function') {
+            setReportPreviewLoading(false);
+            reportPreviewDoc.innerHTML = '<p class="report-preview-fallback">Preview renderer unavailable. You can still save the DOCX file.</p>';
+            return;
+        }
+
+        try {
+            await docx.renderAsync(blob, reportPreviewDoc, null, {
+                className: 'docx',
+                inWrapper: true,
+                breakPages: true
+            });
+            requestAnimationFrame(() => {
+                applyReportPreviewZoom('fit');
+            });
+        } catch (err) {
+            console.error(err);
+            reportPreviewDoc.innerHTML = '<p class="report-preview-fallback">Could not render the preview. You can still save the DOCX file.</p>';
+        } finally {
+            setReportPreviewLoading(false);
+        }
+    }
+
+    function populateReportPreviewMeta(previewMeta) {
+        const fullPath = previewMeta.intended_output_path || joinOutputPath(outputDir, previewMeta.file_name);
+        const { folder, file } = splitSavePath(fullPath);
+        const templateLabel = getReportTemplateLabel(previewMeta.template_id || getReportTemplateId());
+        const commitCount = Number(previewMeta.commit_count || 0);
+        const fileCount = Number(previewMeta.file_count || 0);
+
+        if (reportPreviewTitle) {
+            reportPreviewTitle.textContent = previewMeta.file_name || file || 'Accomplishment Report';
+        }
+        if (reportPreviewStats) {
+            const parts = [templateLabel];
+            if (commitCount > 0) parts.push(`${commitCount} commit${commitCount === 1 ? '' : 's'}`);
+            if (fileCount > 0) parts.push(`${fileCount} file${fileCount === 1 ? '' : 's'}`);
+            reportPreviewStats.textContent = parts.join(' · ');
+        }
+        if (reportPreviewFolder) {
+            reportPreviewFolder.textContent = folder;
+            reportPreviewFolder.title = folder;
+        }
+        if (reportPreviewFilename) {
+            reportPreviewFilename.textContent = file;
+        }
+        if (reportPreviewPath) {
+            reportPreviewPath.textContent = fullPath;
+        }
+        if (reportPreviewCopyPathBtn) {
+            reportPreviewCopyPathBtn.dataset.fullPath = fullPath;
+        }
+    }
+
+    function openReportPreviewModal(previewMeta) {
+        pendingPreviewReport = previewMeta;
+        populateReportPreviewMeta(previewMeta);
+        resetReportPreviewZoom();
+        setReportPreviewLoading(true);
+
+        if (reportPreviewModal) {
+            reportPreviewModal.hidden = false;
+            requestAnimationFrame(() => {
+                reportPreviewModal.classList.add('is-open');
+            });
+        }
+        document.body.classList.add('report-preview-open');
+    }
+
+    async function requestDiscardPreviewModal() {
+        if (isConfirmingPreview) return;
+        const discard = await showConfirm({
+            title: 'Discard preview?',
+            message: 'The report has not been saved yet. You can go back and save when ready.',
+            confirmLabel: 'Discard preview',
+            cancelLabel: 'Keep reviewing',
+            variant: 'danger'
+        });
+        if (discard) {
+            closeReportPreviewModal({ discard: true });
+        }
+    }
+
+    async function closeReportPreviewModal(options = {}) {
+        const { discard = true } = options;
+        const previewId = pendingPreviewReport?.preview_id;
+        pendingPreviewReport = null;
+
+        if (reportPreviewDoc) {
+            reportPreviewDoc.innerHTML = '';
+            reportPreviewDoc.style.minHeight = '';
+            reportPreviewDoc.classList.remove('is-loading');
+        }
+        setReportPreviewLoading(false);
+        resetReportPreviewZoom();
+
+        if (reportPreviewModal) {
+            reportPreviewModal.classList.remove('is-open');
+        }
+        document.body.classList.remove('report-preview-open');
+
+        window.setTimeout(() => {
+            if (reportPreviewModal) reportPreviewModal.hidden = true;
+        }, 260);
+
+        if (discard && previewId) {
+            try {
+                await apiFetch('discard_preview_report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ preview_id: previewId })
+                });
+            } catch (err) {
+                console.warn('Could not discard preview session', err);
+            }
+        }
+    }
+
+    async function copyReportPreviewPath() {
+        const fullPath = reportPreviewCopyPathBtn?.dataset.fullPath || reportPreviewPath?.textContent || '';
+        if (!fullPath || fullPath === '—') return;
+
+        try {
+            await navigator.clipboard.writeText(fullPath);
+            showToast('Copied', 'Full save path copied to clipboard.');
+        } catch {
+            showToast('Copy failed', 'Could not copy path to clipboard.', true);
+        }
+    }
+
+    async function confirmPendingReport() {
+        if (!pendingPreviewReport?.preview_id || isConfirmingPreview) return;
+
+        isConfirmingPreview = true;
+        if (reportPreviewConfirmBtn) {
+            reportPreviewConfirmBtn.disabled = true;
+            reportPreviewConfirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+        }
+
+        try {
+            const confirmResult = await apiFetch('confirm_report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    preview_id: pendingPreviewReport.preview_id,
+                    output_dir: outputDir
+                })
+            });
+
+            if (!confirmResult.response.ok) {
+                throw new Error(confirmResult.data.error || `Server error (${confirmResult.response.status})`);
+            }
+
+            const result = confirmResult.data;
+            if (!result.success) {
+                throw new Error(result.error || 'Unknown server error');
+            }
+
+            const savedPath = result.file_path || joinOutputPath(outputDir, result.file_name);
+            await closeReportPreviewModal({ discard: false });
+            const toastMsg = result.alternate_name_used
+                ? `The original file was open or locked. Saved as: ${savedPath}`
+                : `File saved to ${savedPath}`;
+            showToast('Report Saved!', toastMsg);
+            console.log('Saved to:', savedPath);
+            invalidateOutputDocsCache();
+            updateReportOutputPreview();
+        } catch (err) {
+            console.error(err);
+            showToast('Error', err.message || 'Could not save report.', true);
+        } finally {
+            isConfirmingPreview = false;
+            if (reportPreviewConfirmBtn) {
+                reportPreviewConfirmBtn.disabled = false;
+                reportPreviewConfirmBtn.innerHTML = REPORT_PREVIEW_CONFIRM_BTN_HTML;
+            }
+        }
+    }
+
+    async function previewReport() {
+        const readiness = getGenerateReadiness();
+        if (!readiness.canGenerate) {
+            showToast('Cannot Preview', readiness.reason, 'warning');
+            return;
+        }
+
+        const dateRangeStr = formatDateRange(sinceInput.value, untilInput.value);
+
         setGenerateButtonBusy(true);
         showReportLoadingOverlay(buildOutputFileName(dateRangeStr));
 
         try {
-            const payload = {
-                template_id: getReportTemplateId(),
-                developer_name: devName,
-                job_title: jobTitle,
-                project_title: projTitle,
-                date_range_text: dateRangeStr,
-                branches_text: branchesTextStr,
-                executive_summary: execSummaryVal,
-                key_accomplishments: keyAccomplishmentsVal,
-                detailed_files: fileRows,
-                file_section_mode: getFileSectionMode(),
-                impact_verification: impactVerificationVal,
-                verification_status: verificationStatusVal,
-                commit_count: activeCommits.length,
-                file_count: fileRows.length,
-                repo_count: repoCount,
-                report_status: 'On Track / For Review',
-                generated_date: new Date().toLocaleDateString('en-US', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric'
-                }),
-                acts_environment: actsEnvironmentInput?.value.trim() || '',
-                acts_system_phase: actsSystemPhaseInput?.value.trim() || '',
-                acts_status: actsStatusInput?.value.trim() || '',
-                output_dir: outputDir
-            };
-
             saveActsMetaToStorage();
 
-            const reportResult = await apiFetch('generate_report', {
+            const previewResult = await apiFetch('preview_report', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(buildReportPayload())
             });
 
-            if (!reportResult.response.ok) {
-                throw new Error(reportResult.data.error || `Server error (${reportResult.response.status})`);
+            if (!previewResult.response.ok) {
+                throw new Error(previewResult.data.error || `Server error (${previewResult.response.status})`);
             }
 
-            const result = reportResult.data;
-
-            if (result.success) {
-                const savedPath = result.file_path || joinOutputPath(outputDir, result.file_name);
-                await hideReportLoadingOverlay({ success: true });
-                const toastMsg = result.alternate_name_used
-                    ? `The original file was open or locked. Saved as: ${savedPath}`
-                    : `File saved to ${savedPath}`;
-                showToast('Report Generated!', toastMsg);
-                console.log('Saved to:', savedPath);
-                invalidateOutputDocsCache();
-                updateReportOutputPreview();
-            } else {
+            const result = previewResult.data;
+            if (!result.success) {
                 throw new Error(result.error || 'Unknown server error');
             }
+
+            const payload = buildReportPayload();
+            await hideReportLoadingOverlay({ success: true });
+            openReportPreviewModal({
+                preview_id: result.preview_id,
+                file_name: result.file_name,
+                intended_output_path: result.intended_output_path,
+                template_id: payload.template_id,
+                commit_count: payload.commit_count,
+                file_count: payload.file_count
+            });
+
+            const blob = await fetchPreviewDocBlob(result.preview_id);
+            await renderReportPreview(blob);
         } catch (err) {
             console.error(err);
             await hideReportLoadingOverlay({ success: false });
-            showToast('Error', err.message || 'Failed to generate report. Make sure the output path is writable.', true);
+            showToast('Error', err.message || 'Failed to build preview. Make sure the output path is writable.', true);
         } finally {
             setGenerateButtonBusy(false);
             updateGenerateButtonState();
         }
     }
 
-    generateReportBtn.addEventListener('click', generateReport);
+    generateReportBtn.addEventListener('click', previewReport);
+    reportPreviewBackBtn?.addEventListener('click', requestDiscardPreviewModal);
+    reportPreviewCloseBtn?.addEventListener('click', requestDiscardPreviewModal);
+    reportPreviewConfirmBtn?.addEventListener('click', confirmPendingReport);
+    reportPreviewCopyPathBtn?.addEventListener('click', copyReportPreviewPath);
+    reportPreviewZoomButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            applyReportPreviewZoom(btn.dataset.zoom || 'fit');
+        });
+    });
+    window.addEventListener('resize', () => {
+        if (!reportPreviewModal || reportPreviewModal.hidden) return;
+        if (reportPreviewZoomMode === 'fit') {
+            applyReportPreviewZoom('fit');
+        }
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !reportPreviewModal || reportPreviewModal.hidden) return;
+        if (appConfirmActive) return;
+        requestDiscardPreviewModal();
+    });
 });

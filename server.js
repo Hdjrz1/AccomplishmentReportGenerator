@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { loadConfig, resolveSystemDirs, resolveOutputDir, listOutputDocs, listReportTemplates, expandPath, isValidSystemDir, getGitIdentity, discoverGitRepoPaths } = require('./config');
+const { createPreviewReport, resolvePreviewDocPath, confirmPreviewReport, discardPreviewReport } = require('./preview-reports');
 
 const ROOT = __dirname;
 const ROOT_NORMALIZED = path.resolve(ROOT).toLowerCase();
@@ -18,6 +19,16 @@ const IGNORED_EXTENSIONS = new Set([
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
+}
+
+function sendBinaryFile(res, status, filePath, contentType) {
+  const stat = fs.statSync(filePath);
+  res.writeHead(status, {
+    'Content-Type': contentType,
+    'Content-Length': stat.size,
+    'Cache-Control': 'no-store'
+  });
+  fs.createReadStream(filePath).pipe(res);
 }
 
 function readJsonBody(req) {
@@ -341,9 +352,7 @@ function serveFavicon(res) {
 }
 
 function serveIndex(res) {
-  const source = fs.readFileSync(path.join(ROOT, 'index.php'), 'utf8');
-  const phpEnd = source.indexOf('?>');
-  const html = phpEnd >= 0 ? source.slice(phpEnd + 2) : source;
+  const html = fs.readFileSync(path.join(ROOT, 'partials', 'app-ui.php'), 'utf8');
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }
@@ -434,6 +443,19 @@ async function handleApi(req, res, action) {
       return sendJson(res, 200, await generateReport(await readJsonBody(req)));
     }
 
+    if (action === 'preview_report') {
+      return sendJson(res, 200, await createPreviewReport(await readJsonBody(req)));
+    }
+
+    if (action === 'confirm_report') {
+      return sendJson(res, 200, await confirmPreviewReport(await readJsonBody(req)));
+    }
+
+    if (action === 'discard_preview_report') {
+      const input = req.method === 'POST' ? await readJsonBody(req) : {};
+      return sendJson(res, 200, discardPreviewReport(input.preview_id));
+    }
+
     if (action === 'list_output_docs') {
       const input = req.method === 'POST' ? await readJsonBody(req) : {};
       return sendJson(res, 200, listOutputDocs(input.output_dir));
@@ -453,6 +475,22 @@ function createServer(port) {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const action = url.searchParams.get('action');
+
+    if (action === 'get_preview_report') {
+      try {
+        const previewId = url.searchParams.get('preview_id');
+        const { filePath } = resolvePreviewDocPath(previewId);
+        sendBinaryFile(
+          res,
+          200,
+          filePath,
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        );
+      } catch (error) {
+        sendJson(res, 404, { error: error.message });
+      }
+      return;
+    }
 
     if (action) {
       handleApi(req, res, action);

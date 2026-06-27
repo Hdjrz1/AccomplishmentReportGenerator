@@ -393,59 +393,6 @@ function validateFolderPath($requestedPath) {
     return ['valid' => true, 'path' => $path, 'error' => ''];
 }
 
-// API Router
-if (isset($_GET['action'])) {
-    header('Content-Type: application/json');
-    $action = $_GET['action'];
-    
-    try {
-        if ($action === 'get_config') {
-            echo json_encode(loadAppConfig());
-        } elseif ($action === 'get_repos') {
-            $input = json_decode(file_get_contents('php://input'), true) ?: [];
-            $systemDirs = resolveSystemDirs($input['system_dirs'] ?? null);
-            $repos = getRepositories($systemDirs);
-            echo json_encode([
-                'repos' => $repos,
-                'system_dirs' => $systemDirs,
-                'output_dir' => loadAppConfig()['output_dir'],
-            ]);
-        } elseif ($action === 'get_git_identity') {
-            $input = json_decode(file_get_contents('php://input'), true) ?: [];
-            echo json_encode(getGitIdentity($input));
-        } elseif ($action === 'validate_folder') {
-            $input = json_decode(file_get_contents('php://input'), true) ?: [];
-            echo json_encode(validateFolderPath($input['path'] ?? ''));
-        } elseif ($action === 'fetch_logs') {
-            $input = json_decode(file_get_contents('php://input'), true);
-            $repos = $input['repos'] ?? [];
-            $since = $input['since'] ?? '';
-            $until = $input['until'] ?? '';
-            $author = trim($input['git_author'] ?? '');
-            $authors = $input['git_authors'] ?? [];
-            if (!is_array($authors) && $author !== '') {
-                $authors = [$author];
-            }
-            $authors = array_values(array_filter(array_map('trim', $authors)));
-            $workMode = $input['work_mode'] ?? 'both';
-            echo json_encode(fetchGitLogs($repos, $since, $until, $authors, $workMode));
-        } elseif ($action === 'generate_report') {
-            $input = json_decode(file_get_contents('php://input'), true);
-            echo json_encode(generateReport($input));
-        } elseif ($action === 'list_output_docs') {
-            $input = json_decode(file_get_contents('php://input'), true) ?: [];
-            echo json_encode(listOutputDocs($input['output_dir'] ?? null));
-        } else {
-            http_response_code(404);
-            echo json_encode(['error' => 'Action not found']);
-        }
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => $e->getMessage()]);
-    }
-    exit;
-}
-
 // Helper: Run Git command
 function runGitCommand($repoPath, $args) {
     $command = 'git -C ' . escapeshellarg($repoPath) . ' ' . $args;
@@ -865,9 +812,16 @@ function fetchGitLogs($repos, $since, $until, $authors = [], $workMode = 'both')
         'files' => $files,
         'inactive_repos' => $inactiveRepos
     ];
-}// Generate the final DOCX Accomplishment Report using Node.js script
-function generateReport($data) {
-    $data['output_dir'] = resolveOutputDir($data['output_dir'] ?? null);
+}
+
+// Generate the final DOCX Accomplishment Report using Node.js script
+function generateReport($data, $options = []) {
+    if (empty($options['skip_output_resolve'])) {
+        $data['output_dir'] = resolveOutputDir($data['output_dir'] ?? null);
+    } elseif (empty($data['output_dir'])) {
+        $data['output_dir'] = resolveOutputDir(null);
+    }
+
     // Generate temp file name
     $tempFile = tempnam(sys_get_temp_dir(), 'arg_');
     file_put_contents($tempFile, json_encode($data));
@@ -893,6 +847,271 @@ function generateReport($data) {
     }
     
     return $result;
+}
+
+define('ARB_PREVIEW_ROOT', sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'arb-previews');
+define('ARB_PREVIEW_TTL_MS', 60 * 60 * 1000);
+
+function sanitizePreviewId($previewId) {
+    $value = trim((string)$previewId);
+    if ($value === '' || !preg_match('/^p_[a-z0-9_]+$/i', $value)) {
+        throw new Exception('Invalid preview id.');
+    }
+    return $value;
+}
+
+function getPreviewDir($previewId) {
+    return ARB_PREVIEW_ROOT . DIRECTORY_SEPARATOR . sanitizePreviewId($previewId);
+}
+
+function writePreviewMeta($previewDir, $meta) {
+    file_put_contents($previewDir . DIRECTORY_SEPARATOR . 'preview-meta.json', json_encode($meta));
+}
+
+function readPreviewMeta($previewDir) {
+    $metaPath = $previewDir . DIRECTORY_SEPARATOR . 'preview-meta.json';
+    if (!file_exists($metaPath)) {
+        throw new Exception('Preview session not found or expired.');
+    }
+    return json_decode(file_get_contents($metaPath), true);
+}
+
+function cleanupExpiredPreviews() {
+    if (!is_dir(ARB_PREVIEW_ROOT)) {
+        return;
+    }
+    $now = (int)(microtime(true) * 1000);
+    foreach (scandir(ARB_PREVIEW_ROOT) as $entry) {
+        if ($entry === '.' || $entry === '..') continue;
+        $dir = ARB_PREVIEW_ROOT . DIRECTORY_SEPARATOR . $entry;
+        if (!is_dir($dir)) continue;
+        try {
+            $meta = readPreviewMeta($dir);
+            if ($now - (int)($meta['created_at'] ?? 0) > ARB_PREVIEW_TTL_MS) {
+                removePreviewDir($dir);
+            }
+        } catch (Exception $e) {
+            removePreviewDir($dir);
+        }
+    }
+}
+
+function removePreviewDir($dir) {
+    if (!is_dir($dir)) return;
+    foreach (scandir($dir) as $entry) {
+        if ($entry === '.' || $entry === '..') continue;
+        $path = $dir . DIRECTORY_SEPARATOR . $entry;
+        if (is_dir($path)) {
+            removePreviewDir($path);
+        } else {
+            @unlink($path);
+        }
+    }
+    @rmdir($dir);
+}
+
+function createPreviewReport($data) {
+    cleanupExpiredPreviews();
+
+    $previewId = 'p_' . time() . '_' . bin2hex(random_bytes(4));
+    $previewDir = getPreviewDir($previewId);
+    if (!is_dir($previewDir) && !mkdir($previewDir, 0777, true)) {
+        throw new Exception('Could not create preview folder.');
+    }
+
+    $intendedOutputDir = resolveOutputDir($data['output_dir'] ?? null);
+    $data['output_dir'] = $previewDir;
+    $result = generateReport($data, ['skip_output_resolve' => true]);
+
+    writePreviewMeta($previewDir, [
+        'preview_id' => $previewId,
+        'file_name' => $result['file_name'],
+        'file_path' => $result['file_path'],
+        'intended_output_dir' => $intendedOutputDir,
+        'template_id' => $data['template_id'] ?? 'default',
+        'date_range_text' => $data['date_range_text'] ?? '',
+        'created_at' => (int)(microtime(true) * 1000),
+    ]);
+
+    return [
+        'success' => true,
+        'preview_id' => $previewId,
+        'file_name' => $result['file_name'],
+        'intended_output_dir' => $intendedOutputDir,
+        'intended_output_path' => $intendedOutputDir . DIRECTORY_SEPARATOR . $result['file_name'],
+        'template_id' => $data['template_id'] ?? 'default',
+        'alternate_name_used' => !empty($result['alternate_name_used']),
+    ];
+}
+
+function resolvePreviewDocPath($previewId) {
+    $previewDir = getPreviewDir($previewId);
+    $meta = readPreviewMeta($previewDir);
+
+    $now = (int)(microtime(true) * 1000);
+    if ($now - (int)($meta['created_at'] ?? 0) > ARB_PREVIEW_TTL_MS) {
+        removePreviewDir($previewDir);
+        throw new Exception('Preview session expired. Build a new preview.');
+    }
+
+    $filePath = $previewDir . DIRECTORY_SEPARATOR . $meta['file_name'];
+    if (!file_exists($filePath)) {
+        throw new Exception('Preview document not found.');
+    }
+
+    return ['file_path' => $filePath, 'meta' => $meta];
+}
+
+function isLockedFileErrorMessage($message) {
+    return (bool)preg_match('/locked|EBUSY|EPERM/i', (string)$message);
+}
+
+function confirmPreviewReport($data) {
+    $previewId = sanitizePreviewId($data['preview_id'] ?? '');
+    $resolved = resolvePreviewDocPath($previewId);
+    $filePath = $resolved['file_path'];
+    $meta = $resolved['meta'];
+
+    $outputDir = resolveOutputDir($data['output_dir'] ?? ($meta['intended_output_dir'] ?? null));
+    $fileName = $meta['file_name'] ?? buildOutputFileName($meta['date_range_text'] ?? '');
+
+    if (!is_dir($outputDir) && !mkdir($outputDir, 0777, true)) {
+        throw new Exception('Could not create output folder.');
+    }
+
+    $destPath = $outputDir . DIRECTORY_SEPARATOR . $fileName;
+    $alternateNameUsed = false;
+
+    $copyTo = function ($targetPath) use ($filePath) {
+        if (!@copy($filePath, $targetPath)) {
+            $err = error_get_last();
+            throw new Exception($err['message'] ?? 'Could not save report file.');
+        }
+    };
+
+    try {
+        $copyTo($destPath);
+    } catch (Exception $err) {
+        if (!isLockedFileErrorMessage($err->getMessage())) {
+            throw $err;
+        }
+        $ext = pathinfo($fileName, PATHINFO_EXTENSION);
+        $base = pathinfo($fileName, PATHINFO_FILENAME);
+        $saved = false;
+        for ($i = 2; $i <= 99; $i++) {
+            $altPath = $outputDir . DIRECTORY_SEPARATOR . $base . ' (' . $i . ').' . $ext;
+            if (file_exists($altPath)) continue;
+            try {
+                $copyTo($altPath);
+                $destPath = $altPath;
+                $alternateNameUsed = true;
+                $saved = true;
+                break;
+            } catch (Exception $altErr) {
+                if (!isLockedFileErrorMessage($altErr->getMessage())) {
+                    throw $altErr;
+                }
+            }
+        }
+        if (!$saved) {
+            throw $err;
+        }
+    }
+
+    removePreviewDir(getPreviewDir($previewId));
+
+    return [
+        'success' => true,
+        'message' => 'Report saved successfully.',
+        'file_name' => basename($destPath),
+        'file_path' => $destPath,
+        'template_id' => $meta['template_id'] ?? 'default',
+        'alternate_name_used' => $alternateNameUsed,
+    ];
+}
+
+function discardPreviewReport($previewId) {
+    removePreviewDir(getPreviewDir($previewId));
+    return ['success' => true];
+}
+
+// API Router (after all helpers so preview constants and handlers are defined)
+if (isset($_GET['action']) && $_GET['action'] === 'get_preview_report') {
+    try {
+        $previewId = $_GET['preview_id'] ?? '';
+        $resolved = resolvePreviewDocPath($previewId);
+        $filePath = $resolved['file_path'];
+        header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        header('Content-Length: ' . filesize($filePath));
+        header('Cache-Control: no-store');
+        readfile($filePath);
+    } catch (Exception $e) {
+        http_response_code(404);
+        header('Content-Type: application/json');
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+if (isset($_GET['action'])) {
+    header('Content-Type: application/json');
+    $action = $_GET['action'];
+
+    try {
+        if ($action === 'get_config') {
+            echo json_encode(loadAppConfig());
+        } elseif ($action === 'get_repos') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            $systemDirs = resolveSystemDirs($input['system_dirs'] ?? null);
+            $repos = getRepositories($systemDirs);
+            echo json_encode([
+                'repos' => $repos,
+                'system_dirs' => $systemDirs,
+                'output_dir' => loadAppConfig()['output_dir'],
+            ]);
+        } elseif ($action === 'get_git_identity') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            echo json_encode(getGitIdentity($input));
+        } elseif ($action === 'validate_folder') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            echo json_encode(validateFolderPath($input['path'] ?? ''));
+        } elseif ($action === 'fetch_logs') {
+            $input = json_decode(file_get_contents('php://input'), true);
+            $repos = $input['repos'] ?? [];
+            $since = $input['since'] ?? '';
+            $until = $input['until'] ?? '';
+            $author = trim($input['git_author'] ?? '');
+            $authors = $input['git_authors'] ?? [];
+            if (!is_array($authors) && $author !== '') {
+                $authors = [$author];
+            }
+            $authors = array_values(array_filter(array_map('trim', $authors)));
+            $workMode = $input['work_mode'] ?? 'both';
+            echo json_encode(fetchGitLogs($repos, $since, $until, $authors, $workMode));
+        } elseif ($action === 'generate_report') {
+            $input = json_decode(file_get_contents('php://input'), true);
+            echo json_encode(generateReport($input));
+        } elseif ($action === 'preview_report') {
+            $input = json_decode(file_get_contents('php://input'), true);
+            echo json_encode(createPreviewReport($input));
+        } elseif ($action === 'confirm_report') {
+            $input = json_decode(file_get_contents('php://input'), true);
+            echo json_encode(confirmPreviewReport($input));
+        } elseif ($action === 'discard_preview_report') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            echo json_encode(discardPreviewReport($input['preview_id'] ?? ''));
+        } elseif ($action === 'list_output_docs') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: [];
+            echo json_encode(listOutputDocs($input['output_dir'] ?? null));
+        } else {
+            http_response_code(404);
+            echo json_encode(['error' => 'Action not found']);
+        }
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
 }
 ?>
 <!DOCTYPE html>
@@ -1247,7 +1466,7 @@ function generateReport($data) {
                         <span id="sticky-output-hint" class="sticky-output-hint" hidden></span>
                     </div>
                     <button type="button" id="generate-report-btn" class="btn btn-success btn-lg" disabled>
-                        <i class="fa-solid fa-file-word"></i> Generate DOCX Report
+                        <i class="fa-solid fa-eye"></i> Preview Report
                     </button>
                 </div>
             </div>
@@ -1395,7 +1614,7 @@ function generateReport($data) {
                     </li>
                     <li class="report-loading-step" data-step="4">
                         <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
-                        <span class="report-loading-step-label">Finalizing output</span>
+                        <span class="report-loading-step-label">Preparing preview</span>
                     </li>
                 </ul>
             </div>
@@ -1412,6 +1631,94 @@ function generateReport($data) {
         </div>
     </div>
 
+    <!-- Report preview modal (confirm before saving to Documents) -->
+    <div id="report-preview-modal" class="report-preview-modal" hidden>
+        <div class="report-preview-backdrop"></div>
+        <div class="report-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="report-preview-title">
+            <header class="report-preview-header">
+                <div class="report-preview-title-row">
+                    <div class="report-preview-icon-badge" aria-hidden="true">
+                        <i class="fa-solid fa-file-word"></i>
+                    </div>
+                    <div class="report-preview-heading">
+                        <h2 id="report-preview-title">Accomplishment Report</h2>
+                        <p id="report-preview-stats" class="report-preview-stats">—</p>
+                    </div>
+                    <span id="report-preview-draft-badge" class="report-preview-draft-badge">Not saved</span>
+                    <button type="button" id="report-preview-close-btn" class="report-preview-close-btn" title="Discard preview" aria-label="Discard preview">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </header>
+
+            <div class="report-preview-location-bar">
+                <div class="report-preview-location-main">
+                    <i class="fa-solid fa-folder-open" aria-hidden="true"></i>
+                    <div class="report-preview-location-text">
+                        <span class="report-preview-meta-label">Save to</span>
+                        <span id="report-preview-folder" class="report-preview-folder">—</span>
+                        <span id="report-preview-filename" class="report-preview-filename">—</span>
+                    </div>
+                </div>
+                <button type="button" id="report-preview-copy-path-btn" class="btn btn-secondary btn-sm" title="Copy full save path">
+                    <i class="fa-solid fa-copy"></i> Copy path
+                </button>
+            </div>
+            <details class="report-preview-path-details">
+                <summary>View full path</summary>
+                <code id="report-preview-path" class="report-preview-path-code">—</code>
+            </details>
+
+            <div class="report-preview-body">
+                <div class="report-preview-toolbar" role="toolbar" aria-label="Preview zoom controls">
+                    <span class="report-preview-toolbar-label">Zoom</span>
+                    <button type="button" id="report-preview-zoom-fit" class="btn btn-secondary btn-sm report-preview-zoom-btn is-active" data-zoom="fit">Fit width</button>
+                    <button type="button" id="report-preview-zoom-100" class="btn btn-secondary btn-sm report-preview-zoom-btn" data-zoom="100">100%</button>
+                    <button type="button" id="report-preview-zoom-out" class="btn btn-secondary btn-sm report-preview-zoom-btn" data-zoom="out" aria-label="Zoom out">
+                        <i class="fa-solid fa-minus"></i>
+                    </button>
+                    <button type="button" id="report-preview-zoom-in" class="btn btn-secondary btn-sm report-preview-zoom-btn" data-zoom="in" aria-label="Zoom in">
+                        <i class="fa-solid fa-plus"></i>
+                    </button>
+                    <span id="report-preview-zoom-label" class="report-preview-zoom-label" aria-live="polite">Fit width</span>
+                </div>
+                <div class="report-preview-viewport">
+                    <div id="report-preview-loading" class="report-preview-loading" hidden>
+                        <div class="report-preview-loading-ring" aria-hidden="true"></div>
+                        <span>Rendering document preview…</span>
+                    </div>
+                    <div id="report-preview-doc" class="report-preview-doc" aria-live="polite"></div>
+                </div>
+            </div>
+
+            <footer class="report-preview-footer">
+                <button type="button" id="report-preview-back-btn" class="btn btn-secondary">
+                    <i class="fa-solid fa-arrow-left"></i> Back to edit
+                </button>
+                <p class="report-preview-footer-hint">Review the report above, then save when ready.</p>
+                <button type="button" id="report-preview-confirm-btn" class="btn btn-success btn-lg">
+                    <i class="fa-solid fa-floppy-disk"></i> Save to Documents
+                </button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- ARB confirm dialog (replaces native browser confirm) -->
+    <div id="app-confirm-dialog" class="app-confirm" hidden>
+        <div class="app-confirm-backdrop"></div>
+        <div class="app-confirm-panel" role="alertdialog" aria-modal="true" aria-labelledby="app-confirm-title" aria-describedby="app-confirm-message">
+            <div class="app-confirm-icon" aria-hidden="true">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 id="app-confirm-title" class="app-confirm-title">Are you sure?</h3>
+            <p id="app-confirm-message" class="app-confirm-message"></p>
+            <div class="app-confirm-actions">
+                <button type="button" id="app-confirm-cancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="app-confirm-ok" class="btn btn-danger">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="toast">
         <i class="toast-icon fa-solid fa-circle-check"></i>
@@ -1422,6 +1729,8 @@ function generateReport($data) {
     </div>
 
     <!-- Script file -->
+    <script src="assets/vendor/docx-preview/jszip.min.js"></script>
+    <script src="assets/vendor/docx-preview/docx-preview.min.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

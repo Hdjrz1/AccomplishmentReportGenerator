@@ -96,10 +96,25 @@ function syncFonts() {
   }
 }
 
+function syncDocxPreview() {
+  const docxSrc = path.join(NODE_MODULES, 'docx-preview', 'dist', 'docx-preview.min.js');
+  const jszipSrc = path.join(NODE_MODULES, 'jszip', 'dist', 'jszip.min.js');
+  const docxDest = path.join(ROOT, 'assets', 'vendor', 'docx-preview');
+
+  if (!fs.existsSync(docxSrc) || !fs.existsSync(jszipSrc)) {
+    throw new Error('Run npm install first (docx-preview, jszip).');
+  }
+
+  ensureDir(docxDest);
+  copyFile(jszipSrc, path.join(docxDest, 'jszip.min.js'));
+  copyFile(docxSrc, path.join(docxDest, 'docx-preview.min.js'));
+}
+
 function main() {
   syncFontAwesome();
   syncFonts();
-  console.log('Synced offline UI assets to assets/vendor/fontawesome and assets/fonts/');
+  syncDocxPreview();
+  console.log('Synced offline UI assets to assets/vendor/fontawesome, assets/fonts/, and assets/vendor/docx-preview/');
 }
 
 main();
