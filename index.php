@@ -1099,34 +1099,87 @@ function generateReport($data) {
                             </div>
                         </div>
 
-                        <div class="card-footer border-top">
-                            <div class="export-meta">
-                                <div class="meta-item">
-                                    <span class="meta-label">Report Template:</span>
-                                    <select id="report-template-select" class="report-template-select" aria-label="Report template">
-                                        <option value="default">Default (5-section)</option>
-                                        <option value="acts">ACTS Colleges (Extended)</option>
-                                    </select>
+                        <div class="card-footer card-footer-export border-top">
+                            <div class="export-panel">
+                                <div class="export-panel-header">
+                                    <div class="export-panel-heading">
+                                        <span class="export-panel-icon" aria-hidden="true">
+                                            <i class="fa-solid fa-file-export"></i>
+                                        </span>
+                                        <div>
+                                            <h3 class="export-panel-title">Export Settings</h3>
+                                            <p class="export-panel-subtitle">Choose a template and review output details before generating</p>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="meta-item acts-template-meta" id="acts-template-meta" hidden>
-                                    <span class="meta-label">ACTS Environment:</span>
-                                    <input type="text" id="acts-environment" class="acts-meta-input" placeholder="e.g. Laragon (PHP 8.3, MySQL)">
-                                </div>
-                                <div class="meta-item acts-template-meta" hidden>
-                                    <span class="meta-label">ACTS System Phase:</span>
-                                    <input type="text" id="acts-system-phase" class="acts-meta-input" placeholder="e.g. Student Portal Backend, SSOT, Audit">
-                                </div>
-                                <div class="meta-item acts-template-meta" hidden>
-                                    <span class="meta-label">ACTS Status:</span>
-                                    <input type="text" id="acts-status" class="acts-meta-input" placeholder="e.g. Completed / For Continued Validation">
-                                </div>
-                                <div class="meta-item">
-                                    <span class="meta-label">Branch/Repo Text:</span>
-                                    <span id="meta-branches-display" class="meta-value">-</span>
-                                </div>
-                                <div class="meta-item">
-                                    <span class="meta-label">Output Directory:</span>
-                                    <span id="meta-output-dir" class="meta-value">Documents\Accomplishment Reports</span>
+
+                                <div class="export-panel-grid">
+                                    <div class="export-panel-section">
+                                        <h4 class="export-section-label">Report Configuration</h4>
+                                        <div class="export-fields">
+                                            <div class="export-field">
+                                                <label class="export-field-label" for="report-template-select">
+                                                    <i class="fa-solid fa-file-lines"></i>
+                                                    Report Template
+                                                </label>
+                                                <div class="export-field-input-wrap">
+                                                    <select id="report-template-select" class="report-template-select" aria-label="Report template">
+                                                        <option value="default">Default (5-section)</option>
+                                                        <option value="acts">ACTS Colleges (Extended)</option>
+                                                    </select>
+                                                    <i class="fa-solid fa-chevron-down export-select-chevron" aria-hidden="true"></i>
+                                                </div>
+                                            </div>
+
+                                            <div class="export-field acts-template-meta" id="acts-template-meta" hidden>
+                                                <label class="export-field-label" for="acts-environment">
+                                                    <i class="fa-solid fa-server"></i>
+                                                    ACTS Environment
+                                                </label>
+                                                <input type="text" id="acts-environment" class="acts-meta-input" placeholder="e.g. Laragon (PHP 8.3, MySQL)">
+                                            </div>
+
+                                            <div class="export-field acts-template-meta" hidden>
+                                                <label class="export-field-label" for="acts-system-phase">
+                                                    <i class="fa-solid fa-layer-group"></i>
+                                                    ACTS System Phase
+                                                </label>
+                                                <input type="text" id="acts-system-phase" class="acts-meta-input" placeholder="e.g. Student Portal Backend, SSOT, Audit">
+                                            </div>
+
+                                            <div class="export-field acts-template-meta" hidden>
+                                                <label class="export-field-label" for="acts-status">
+                                                    <i class="fa-solid fa-circle-check"></i>
+                                                    ACTS Status
+                                                </label>
+                                                <input type="text" id="acts-status" class="acts-meta-input" placeholder="e.g. Completed / For Continued Validation">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="export-panel-section export-panel-section--details">
+                                        <h4 class="export-section-label">Output Details</h4>
+                                        <div class="export-details">
+                                            <div class="export-detail-card">
+                                                <span class="export-detail-icon export-detail-icon--branch" aria-hidden="true">
+                                                    <i class="fa-solid fa-code-branch"></i>
+                                                </span>
+                                                <div class="export-detail-content">
+                                                    <span class="export-detail-label">Branch / Repository</span>
+                                                    <span id="meta-branches-display" class="export-detail-value meta-value">—</span>
+                                                </div>
+                                            </div>
+                                            <div class="export-detail-card">
+                                                <span class="export-detail-icon export-detail-icon--folder" aria-hidden="true">
+                                                    <i class="fa-solid fa-folder-open"></i>
+                                                </span>
+                                                <div class="export-detail-content">
+                                                    <span class="export-detail-label">Output Directory</span>
+                                                    <span id="meta-output-dir" class="export-detail-value export-detail-value--path meta-value">Documents\Accomplishment Reports</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1257,38 +1310,60 @@ function generateReport($data) {
     <div id="report-loading-overlay" class="report-loading-overlay" hidden aria-live="polite" aria-busy="true" role="alertdialog" aria-labelledby="report-loading-title" aria-describedby="report-loading-subtitle">
         <div class="report-loading-backdrop"></div>
         <div class="report-loading-panel">
-            <div class="report-loading-spinner-wrap" aria-hidden="true">
-                <div class="report-loading-ring"></div>
-                <div class="report-loading-ring report-loading-ring--inner"></div>
-                <i class="fa-solid fa-file-word report-loading-doc-icon"></i>
+            <div class="report-loading-hero">
+                <div class="report-loading-spinner-wrap" aria-hidden="true">
+                    <div class="report-loading-ring"></div>
+                    <span class="report-loading-icon-badge">
+                        <i class="fa-solid fa-file-word report-loading-doc-icon"></i>
+                    </span>
+                </div>
+                <div class="report-loading-heading">
+                    <span class="report-loading-status-badge" id="report-loading-status-badge">In progress</span>
+                    <h2 id="report-loading-title" class="report-loading-title">Generating DOCX Report</h2>
+                    <p id="report-loading-subtitle" class="report-loading-subtitle">Compiling your accomplishment data into a professional document…</p>
+                </div>
             </div>
-            <h2 id="report-loading-title" class="report-loading-title">Generating DOCX Report</h2>
-            <p id="report-loading-subtitle" class="report-loading-subtitle">Compiling your accomplishment data into a professional document…</p>
-            <p id="report-loading-filename" class="report-loading-filename"></p>
-            <ul id="report-loading-steps" class="report-loading-steps">
-                <li class="report-loading-step" data-step="0">
-                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
-                    <span class="report-loading-step-label">Validating report sections</span>
-                </li>
-                <li class="report-loading-step" data-step="1">
-                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
-                    <span class="report-loading-step-label">Compiling file modifications</span>
-                </li>
-                <li class="report-loading-step" data-step="2">
-                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
-                    <span class="report-loading-step-label">Building document structure</span>
-                </li>
-                <li class="report-loading-step" data-step="3">
-                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
-                    <span class="report-loading-step-label">Writing DOCX file</span>
-                </li>
-                <li class="report-loading-step" data-step="4">
-                    <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
-                    <span class="report-loading-step-label">Finalizing output</span>
-                </li>
-            </ul>
-            <div class="report-loading-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="report-loading-progress">
-                <div class="report-loading-progress-bar" id="report-loading-progress-bar"></div>
+
+            <div class="report-loading-filename-card">
+                <span class="report-loading-filename-icon" aria-hidden="true">
+                    <i class="fa-solid fa-file-word"></i>
+                </span>
+                <span id="report-loading-filename" class="report-loading-filename">Accomplishment Report.docx</span>
+            </div>
+
+            <div class="report-loading-steps-card">
+                <ul id="report-loading-steps" class="report-loading-steps">
+                    <li class="report-loading-step" data-step="0">
+                        <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                        <span class="report-loading-step-label">Validating report sections</span>
+                    </li>
+                    <li class="report-loading-step" data-step="1">
+                        <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                        <span class="report-loading-step-label">Compiling file modifications</span>
+                    </li>
+                    <li class="report-loading-step" data-step="2">
+                        <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                        <span class="report-loading-step-label">Building document structure</span>
+                    </li>
+                    <li class="report-loading-step" data-step="3">
+                        <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                        <span class="report-loading-step-label">Writing DOCX file</span>
+                    </li>
+                    <li class="report-loading-step" data-step="4">
+                        <span class="report-loading-step-icon"><i class="fa-solid fa-check"></i></span>
+                        <span class="report-loading-step-label">Finalizing output</span>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="report-loading-footer">
+                <div class="report-loading-progress-meta">
+                    <span class="report-loading-progress-label">Progress</span>
+                    <span id="report-loading-percent" class="report-loading-percent">0%</span>
+                </div>
+                <div class="report-loading-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="report-loading-progress">
+                    <div class="report-loading-progress-bar" id="report-loading-progress-bar"></div>
+                </div>
             </div>
         </div>
     </div>
