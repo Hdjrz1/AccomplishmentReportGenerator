@@ -860,12 +860,9 @@ function generateReport($data) {
     <title>ARB Accomplishment Report Builder</title>
     <link rel="icon" type="image/png" href="assets/arb-logo.png">
     <link rel="apple-touch-icon" href="assets/arb-logo.png">
-    <!-- Google Fonts: Plus Jakarta Sans + Playfair Display -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
-    <!-- FontAwesome for beautiful icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Self-hosted fonts and icons (fully offline) -->
+    <link rel="stylesheet" href="css/fonts-local.css">
+    <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css">
     <!-- Custom styling -->
     <link rel="stylesheet" href="css/style.css">
     <script>window.ARG_API_BASE = "";</script>

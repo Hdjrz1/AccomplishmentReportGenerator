@@ -373,7 +373,10 @@ function serveStatic(req, res, pathname) {
     '.js': 'application/javascript; charset=utf-8',
     '.html': 'text/html; charset=utf-8',
     '.svg': 'image/svg+xml',
-    '.png': 'image/png'
+    '.png': 'image/png',
+    '.woff2': 'font/woff2',
+    '.woff': 'font/woff',
+    '.ttf': 'font/ttf'
   };
   res.writeHead(200, { 'Content-Type': contentTypes[ext] || 'application/octet-stream' });
   fs.createReadStream(filePath).pipe(res);

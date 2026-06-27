@@ -24,6 +24,8 @@ Choose the template in the report editor before generating. You do not need to a
 
 The app works on **Windows** (primary target). It may run on macOS/Linux if Git and Node are installed.
 
+**Fully offline after install:** fonts (Plus Jakarta Sans, Playfair Display) and icons (Font Awesome) are bundled under `assets/` — no Google Fonts or CDN requests at runtime. Internet is only needed for the initial `git clone` and `npm install`.
+
 ---
 
 ## Installation
@@ -229,8 +231,15 @@ A success toast shows the full path. Open the file in Microsoft Word or compatib
 │   ├── acts-template.docx    # ACTS Word shell used on generate
 │   └── build-default-template.js
 ├── js/app.js          # Frontend workflow
-├── css/style.css      # Styles and themes
-└── assets/            # Logo and icons
+├── css/
+│   ├── style.css      # Styles and themes
+│   └── fonts-local.css # Self-hosted web fonts
+├── scripts/
+│   └── sync-vendor-assets.js # Copies fonts/icons into assets/ (runs on npm install)
+└── assets/
+    ├── arb-logo.png
+    ├── fonts/         # Plus Jakarta Sans + Playfair Display (.woff2)
+    └── vendor/fontawesome/  # Font Awesome CSS + webfonts
 ```
 
 ---
