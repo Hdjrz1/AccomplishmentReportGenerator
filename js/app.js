@@ -98,6 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const reportLoadingSteps = document.getElementById('report-loading-steps');
     const reportLoadingProgress = document.getElementById('report-loading-progress');
     const reportLoadingProgressBar = document.getElementById('report-loading-progress-bar');
+    const reportLoadingPercent = document.getElementById('report-loading-percent');
+    const reportLoadingStatusBadge = document.getElementById('report-loading-status-badge');
     
     const SYSTEM_DIRS_STORAGE_KEY = 'system_dirs';
     const GIT_AUTHORS_STORAGE_KEY = 'git_authors';
@@ -344,6 +346,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reportLoadingProgress) {
             reportLoadingProgress.setAttribute('aria-valuenow', String(Math.round(percent)));
         }
+        if (reportLoadingPercent) {
+            reportLoadingPercent.textContent = `${Math.round(percent)}%`;
+        }
     }
 
     function resetReportLoadingSteps() {
@@ -388,6 +393,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reportLoadingFilename) {
             reportLoadingFilename.textContent = filename || 'Accomplishment Report.docx';
         }
+        if (reportLoadingStatusBadge) {
+            reportLoadingStatusBadge.textContent = 'In progress';
+        }
 
         reportLoadingOverlay.hidden = false;
         reportLoadingOverlay.setAttribute('aria-busy', 'true');
@@ -410,6 +418,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         setReportLoadingProgress(100);
         reportLoadingOverlay?.classList.add('is-complete');
+        if (reportLoadingStatusBadge) {
+            reportLoadingStatusBadge.textContent = 'Complete';
+        }
     }
 
     function hideReportLoadingOverlay(options = {}) {
