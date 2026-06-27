@@ -4,12 +4,6 @@
 date_default_timezone_set('Asia/Manila');
 
 // Target Directories (defaults; overridden by config.json and client system_dirs)
-define('DEFAULT_SUGGESTED_FOLDERS', [
-    'C:\\laragon\\www',
-    'C:\\xampp\\htdocs',
-    '%USERPROFILE%\\Documents\\Projects',
-    '%USERPROFILE%\\source\\repos',
-]);
 
 function expandAppPath($value) {
     if ($value === null || $value === '') return '';
@@ -25,7 +19,6 @@ function expandAppPath($value) {
 function loadAppConfig() {
     $defaults = [
         'system_dirs' => [],
-        'suggested_folders' => array_map('expandAppPath', DEFAULT_SUGGESTED_FOLDERS),
         'output_dir' => expandAppPath('%USERPROFILE%\\Documents\\Accomplishment Reports'),
     ];
 
@@ -44,28 +37,10 @@ function loadAppConfig() {
         $systemDirs = array_values(array_filter(array_map('expandAppPath', $parsed['system_dirs'])));
     }
 
-    $suggestedFolders = $defaults['suggested_folders'];
-    if (!empty($parsed['suggested_folders']) && is_array($parsed['suggested_folders'])) {
-        $suggestedFolders = array_values(array_filter(array_map('expandAppPath', $parsed['suggested_folders'])));
-    }
-
     return [
         'system_dirs' => $systemDirs,
-        'suggested_folders' => $suggestedFolders,
         'output_dir' => expandAppPath($parsed['output_dir'] ?? $defaults['output_dir']),
     ];
-}
-
-function detectCommonDirs() {
-    $config = loadAppConfig();
-    $candidates = array_unique(array_merge($config['suggested_folders'], $config['system_dirs']));
-    $found = [];
-    foreach ($candidates as $dir) {
-        if ($dir !== '' && is_dir($dir)) {
-            $found[] = $dir;
-        }
-    }
-    return array_values($found);
 }
 
 function resolveGitExecutable() {
@@ -434,10 +409,7 @@ if (isset($_GET['action'])) {
                 'repos' => $repos,
                 'system_dirs' => $systemDirs,
                 'output_dir' => loadAppConfig()['output_dir'],
-                'suggested_folders' => loadAppConfig()['suggested_folders'],
             ]);
-        } elseif ($action === 'detect_common_dirs') {
-            echo json_encode(['dirs' => detectCommonDirs()]);
         } elseif ($action === 'get_git_identity') {
             $input = json_decode(file_get_contents('php://input'), true) ?: [];
             echo json_encode(getGitIdentity($input));
@@ -506,43 +478,115 @@ function parseRepoOwnerRepo($url) {
     return basename($url);
 }
 
-// Fetch all Git repositories from configured system directories
+// Fetch all Git repositories from configured system directories (recursive scan)
+define('REPO_SCAN_MAX_DEPTH', 4);
+
+function repoScanSkipDirs() {
+    return [
+        'node_modules', 'vendor', 'dist', 'build', '.next', '.nuxt', 'coverage',
+        '__pycache__', '.venv', 'venv', 'target', 'bin', 'obj', 'packages',
+        'bower_components', '.cache', '.turbo', 'out', '.gradle', '.idea', 'tmp', 'temp',
+    ];
+}
+
+function isGitRepositoryPath($dirPath) {
+    return is_dir($dirPath . DIRECTORY_SEPARATOR . '.git');
+}
+
+function getRepoDisplayName($repoPath, $systemRoot) {
+    $resolvedRepo = realpath($repoPath) ?: $repoPath;
+    $resolvedRoot = realpath($systemRoot) ?: $systemRoot;
+    if (strtolower($resolvedRepo) === strtolower($resolvedRoot)) {
+        return basename($resolvedRoot);
+    }
+    $rel = str_replace('\\', '/', substr($repoPath, strlen(rtrim($systemRoot, '\\/')) + 1));
+    if ($rel === '' || strpos($rel, '..') === 0) {
+        return basename($repoPath);
+    }
+    return $rel;
+}
+
+function discoverGitRepoPaths($systemDir, $maxDepth = REPO_SCAN_MAX_DEPTH) {
+    $resolvedRoot = expandAppPath($systemDir);
+    if (!is_dir($resolvedRoot)) {
+        return [];
+    }
+
+    $results = [];
+    $seen = [];
+
+    $walk = function($currentDir, $depth) use (&$walk, $resolvedRoot, $maxDepth, &$results, &$seen) {
+        if ($depth > $maxDepth) {
+            return;
+        }
+
+        if (isGitRepositoryPath($currentDir)) {
+            $key = strtolower(realpath($currentDir) ?: $currentDir);
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $results[] = [
+                    'path' => realpath($currentDir) ?: $currentDir,
+                    'system_root' => $resolvedRoot,
+                    'name' => getRepoDisplayName($currentDir, $resolvedRoot),
+                ];
+            }
+            return;
+        }
+
+        $entries = @scandir($currentDir);
+        if ($entries === false) {
+            return;
+        }
+
+        $skipDirs = array_flip(repoScanSkipDirs());
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') continue;
+            if ($entry[0] === '.') continue;
+            if (isset($skipDirs[strtolower($entry)])) continue;
+
+            $fullPath = $currentDir . DIRECTORY_SEPARATOR . $entry;
+            if (!is_dir($fullPath)) continue;
+
+            $walk($fullPath, $depth + 1);
+        }
+    };
+
+    $walk($resolvedRoot, 0);
+
+    usort($results, function($a, $b) {
+        return strcasecmp($a['name'], $b['name']);
+    });
+
+    return $results;
+}
+
 function getRepositories($systemDirs = null) {
     $repos = [];
     $dirs = resolveSystemDirs($systemDirs);
+    $discovered = [];
 
     foreach ($dirs as $systemDir) {
-        if (!is_dir($systemDir)) {
-            continue;
-        }
+        $discovered = array_merge($discovered, discoverGitRepoPaths($systemDir));
+    }
 
-        $dirs = scandir($systemDir);
+    foreach ($discovered as $hit) {
+        $fullPath = $hit['path'];
+        $branchRes = runGitCommand($fullPath, 'branch --show-current');
+        $branch = $branchRes['success'] ? trim($branchRes['output']) : 'main';
 
-        foreach ($dirs as $dir) {
-            if ($dir === '.' || $dir === '..') continue;
+        $remoteRes = runGitCommand($fullPath, 'remote get-url origin');
+        $remoteUrl = $remoteRes['success'] ? trim($remoteRes['output']) : '';
+        $repoIdentifier = parseRepoOwnerRepo($remoteUrl);
 
-            $fullPath = $systemDir . DIRECTORY_SEPARATOR . $dir;
-            if (!is_dir($fullPath)) continue;
-
-            $gitDir = $fullPath . DIRECTORY_SEPARATOR . '.git';
-            if (!is_dir($gitDir)) continue;
-
-            $branchRes = runGitCommand($fullPath, 'branch --show-current');
-            $branch = $branchRes['success'] ? trim($branchRes['output']) : 'main';
-
-            $remoteRes = runGitCommand($fullPath, 'remote get-url origin');
-            $remoteUrl = $remoteRes['success'] ? trim($remoteRes['output']) : '';
-            $repoName = parseRepoOwnerRepo($remoteUrl);
-
-            $repos[] = [
-                'name' => $dir,
-                'path' => $fullPath,
-                'branch' => $branch,
-                'remote_url' => $remoteUrl,
-                'repo_identifier' => $repoName ? $repoName : $dir,
-                'system_root' => $systemDir,
-            ];
-        }
+        $repos[] = [
+            'name' => $hit['name'],
+            'path' => $fullPath,
+            'branch' => $branch,
+            'remote_url' => $remoteUrl,
+            'repo_identifier' => $repoIdentifier ? $repoIdentifier : basename($fullPath),
+            'system_root' => $hit['system_root'],
+        ];
     }
 
     return $repos;
@@ -1199,6 +1243,7 @@ function generateReport($data) {
                         <span id="sticky-filename" class="sticky-filename">—</span>
                         <span id="sticky-commits-meta" class="sticky-commits-meta">0 commits selected</span>
                         <span id="sticky-template-meta" class="sticky-template-meta">Default template</span>
+                        <span id="sticky-generate-block-reason" class="sticky-generate-block-reason" hidden></span>
                         <span id="sticky-output-hint" class="sticky-output-hint" hidden></span>
                     </div>
                     <button type="button" id="generate-report-btn" class="btn btn-success btn-lg" disabled>
@@ -1221,7 +1266,7 @@ function generateReport($data) {
             <div class="setup-wizard-steps">
                 <span class="setup-step-indicator active" data-step="1">1. Profile</span>
                 <span class="setup-step-indicator" data-step="2">2. Git Identity</span>
-                <span class="setup-step-indicator" data-step="3">3. Folders</span>
+                <span class="setup-step-indicator" data-step="3">3. Project folders</span>
             </div>
             <div class="setup-wizard-body">
                 <div class="setup-step" data-step="1">
@@ -1268,31 +1313,30 @@ function generateReport($data) {
                     </div>
                 </div>
                 <div class="setup-step" data-step="3" hidden>
-                    <p class="setup-folders-intro help-text">Folders where git repositories are scanned.</p>
+                    <div class="setup-folders-panel">
+                        <h3 class="setup-folders-heading">Where are your Git projects?</h3>
+                        <p class="setup-folders-intro help-text">
+                            Choose one or more folders on your computer. ARB will scan them and list every Git repository it finds — including nested projects up to 4 levels deep.
+                        </p>
 
-                    <div class="setup-folders-block">
-                        <span class="setup-section-label">Configured folders</span>
-                        <div id="setup-system-dirs-list" class="system-dirs-list setup-folders-list"></div>
-                    </div>
-
-                    <div class="setup-folders-block">
-                        <label class="setup-section-label" for="setup-folder-path-input">Add folder</label>
-                        <div class="system-dir-add-row">
-                            <input type="text" id="setup-folder-path-input" class="setup-folder-path-input" placeholder="Paste folder path (e.g. C:\ACTS SYSTEM)" autocomplete="off" spellcheck="false">
-                            <button type="button" id="setup-add-folder-path-btn" class="btn btn-primary">Add</button>
+                        <div class="setup-folders-block">
+                            <span class="setup-section-label">Your project folders</span>
+                            <div id="setup-system-dirs-list" class="system-dirs-list setup-folders-list"></div>
                         </div>
-                        <div class="folder-picker-actions">
-                            <button type="button" id="setup-browse-folder-btn" class="btn btn-secondary btn-browse-folder">
-                                <i class="fa-solid fa-folder-open" aria-hidden="true"></i> Browse folder
+
+                        <div class="setup-folders-add">
+                            <button type="button" id="setup-browse-folder-btn" class="btn btn-primary btn-block btn-browse-folder">
+                                <i class="fa-solid fa-folder-open" aria-hidden="true"></i> Choose folder on this PC
                             </button>
+                            <details class="setup-folders-manual">
+                                <summary class="setup-folders-manual-summary">Or paste a folder path manually</summary>
+                                <div class="system-dir-add-row">
+                                    <input type="text" id="setup-folder-path-input" class="setup-folder-path-input" placeholder="e.g. C:\Projects or C:\laragon\www" autocomplete="off" spellcheck="false">
+                                    <button type="button" id="setup-add-folder-path-btn" class="btn btn-secondary">Add folder</button>
+                                </div>
+                            </details>
                         </div>
                     </div>
-
-                    <div id="setup-suggested-section" class="setup-folders-block setup-suggested-section" hidden>
-                        <span class="setup-section-label">Suggested</span>
-                        <div id="setup-suggested-folders" class="suggested-folders"></div>
-                    </div>
-
                 </div>
             </div>
             <div class="setup-wizard-footer">

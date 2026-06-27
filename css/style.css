@@ -665,45 +665,60 @@ textarea:focus {
     gap: 8px;
 }
 
+.setup-folders-heading {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    color: var(--text-primary);
+}
+
+.setup-folders-panel {
+    display: flex;
+    flex-direction: column;
+}
+
+.setup-folders-add {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+.setup-folders-manual {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+}
+
+.setup-folders-manual-summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    list-style: none;
+    user-select: none;
+}
+
+.setup-folders-manual-summary::-webkit-details-marker {
+    display: none;
+}
+
+.setup-folders-manual[open] .system-dir-add-row {
+    margin-top: 10px;
+}
+
+.setup-folders-empty strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
 .work-mode-options .mode-option {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 13px;
     cursor: pointer;
-}
-
-.suggested-folders {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 0;
-}
-
-.suggested-folder-chip {
-    border: 1px dashed var(--border-color);
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 11px;
-    cursor: pointer;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.suggested-folder-chip:hover {
-    border-color: var(--primary);
-    color: var(--primary);
-}
-
-.folder-picker-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
 }
 
 .btn-browse-folder {
@@ -1707,6 +1722,17 @@ body.light-theme .sticky-generate-bar {
     font-size: 11px;
     color: #f59e0b;
     line-height: 1.35;
+}
+
+.sticky-generate-block-reason {
+    font-size: 11px;
+    color: #f87171;
+    line-height: 1.35;
+}
+
+.btn.btn-success.is-not-ready {
+    opacity: 0.72;
+    box-shadow: none;
 }
 
 .visually-hidden {

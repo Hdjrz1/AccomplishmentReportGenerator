@@ -13,6 +13,11 @@ const {
     buildActsHeaderXml,
     writeDocxUpdatesWithFallback
 } = require('./template/acts-docx');
+const {
+    buildDefaultDocumentXml,
+    buildDefaultHeaderXml,
+    buildDefaultFooterXml
+} = require('./template/default-docx');
 
 const DOC_NS = '<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpsCustomData="http://www.wps.cn/officeDocument/2013/wpsCustomData" mc:Ignorable="w14 w15 wp14">';
 const SECT_PR = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/><w:cols w:space="720" w:num="1"/><w:docGrid w:linePitch="360" w:charSpace="0"/></w:sectPr>';
@@ -725,67 +730,12 @@ function buildActsReportBody(data, templatePath) {
     return xml;
 }
 
-function buildDefaultReportBody(data) {
-    let xml = '';
-    xml += buildParagraphXml('DAILY ACCOMPLISHMENT REPORT', true, 28, 40, 0);
-    xml += buildParagraphXml(`${data.project_title} Development`, false, 22, 180, 0);
-    xml += buildMetadataTableXml(data.developer_name, data.date_range_text, data.project_title, data.branches_text);
-    xml += buildParagraphXml('', false, 20, 100, 0);
-    xml += buildSectionHeadingXml('1. Executive Summary');
-    xml += buildMultilineParagraphsXml(data.executive_summary, 20, 100, 100);
-    xml += buildSectionHeadingXml('2. Key Accomplishments & Technical Enhancements');
-    xml += buildBulletItemsXml(data.key_accomplishments);
-    xml += buildSectionHeadingXml('3. Detailed File Adjustments & Code Changes');
-    xml += buildFileAdjustmentsTableXml(data.detailed_files);
-    xml += buildSectionHeadingXml('4. Impact and Verification');
-    xml += buildBulletItemsXml(data.impact_verification);
-    xml += buildSectionHeadingXml('5. Verification Status');
-    xml += buildParagraphXml(data.verification_status, false, 20, 240, 100);
-    xml += buildSignatureBlockXml(data.developer_name, data.job_title);
-    return xml;
-}
-
-// Prepared By signature builder
-function buildSignatureBlockXml(devName, jobTitle) {
-    return '<w:p>' +
-             '<w:pPr>' +
-               '<w:spacing w:before="240" w:after="0" w:line="240" w:lineRule="auto"/>' +
-               '<w:jc w:val="left"/>' +
-             '</w:pPr>' +
-             '<w:r>' +
-               '<w:rPr>' +
-                 '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>' +
-                 '<w:b w:val="0"/><w:bCs w:val="0"/>' +
-                 '<w:sz w:val="20"/><w:szCs w:val="20"/>' +
-               '</w:rPr>' +
-               '<w:t>Prepared By:\n\n</w:t>' +
-             '</w:r>' +
-             '<w:r>' +
-               '<w:rPr>' +
-                 '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>' +
-                 '<w:b/><w:bCs/>' +
-                 '<w:sz w:val="20"/><w:szCs w:val="20"/>' +
-               '</w:rPr>' +
-               `<w:t>${escapeXml(devName)}\n</w:t>` +
-             '</w:r>' +
-             '<w:r>' +
-               '<w:rPr>' +
-                 '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>' +
-                 '<w:b w:val="0"/><w:bCs w:val="0"/>' +
-                 '<w:sz w:val="20"/><w:szCs w:val="20"/>' +
-               '</w:rPr>' +
-               `<w:t>${escapeXml(jobTitle)}</w:t>` +
-             '</w:r>' +
-           '</w:p>';
-}
-
 function buildReportDocumentXml(data, templatePath = null) {
     const templateId = data.template_id === 'acts' ? 'acts' : 'default';
     if (templateId === 'acts' && templatePath) {
         return buildActsDocumentXml(templatePath, buildActsReportBody(data, templatePath));
     }
-    const body = buildDefaultReportBody(data);
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${DOC_NS}<w:body>${body}${SECT_PR}</w:body></w:document>`;
+    return buildDefaultDocumentXml(data);
 }
 
 // Main generation function
@@ -830,6 +780,9 @@ function main() {
             if (headerXml) {
                 docxUpdates.headerXml = headerXml;
             }
+        } else {
+            docxUpdates.headerXml = buildDefaultHeaderXml(data.project_title, data.date_range_text);
+            docxUpdates.footerXml = buildDefaultFooterXml(data.project_title);
         }
 
         const savedOutputPath = writeDocxUpdatesWithFallback(outputPath, docxUpdates, templateFile.path);

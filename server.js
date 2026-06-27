@@ -3,7 +3,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
-const { loadConfig, resolveSystemDirs, resolveOutputDir, listOutputDocs, listReportTemplates, expandPath, isValidSystemDir, detectCommonDirs, getGitIdentity } = require('./config');
+const { loadConfig, resolveSystemDirs, resolveOutputDir, listOutputDocs, listReportTemplates, expandPath, isValidSystemDir, getGitIdentity, discoverGitRepoPaths } = require('./config');
 
 const ROOT = __dirname;
 const ROOT_NORMALIZED = path.resolve(ROOT).toLowerCase();
@@ -80,32 +80,27 @@ function shouldIgnoreFile(filePath) {
 async function getRepositories(systemDirs) {
   const repos = [];
   const dirs = resolveSystemDirs(systemDirs);
+  const discovered = [];
 
   for (const systemDir of dirs) {
-    if (!fs.existsSync(systemDir)) continue;
+    discovered.push(...discoverGitRepoPaths(systemDir));
+  }
 
-    const entries = fs.readdirSync(systemDir, { withFileTypes: true });
+  for (const hit of discovered) {
+    const fullPath = hit.path;
+    const branchRes = await runGit(fullPath, ['branch', '--show-current']);
+    const remoteRes = await runGit(fullPath, ['remote', 'get-url', 'origin']);
+    const remoteUrl = remoteRes.success ? remoteRes.output.trim() : '';
+    const repoIdentifier = parseRepoOwnerRepo(remoteUrl) || path.basename(fullPath);
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-
-      const fullPath = path.join(systemDir, entry.name);
-      if (!fs.existsSync(path.join(fullPath, '.git'))) continue;
-
-      const branchRes = await runGit(fullPath, ['branch', '--show-current']);
-      const remoteRes = await runGit(fullPath, ['remote', 'get-url', 'origin']);
-      const remoteUrl = remoteRes.success ? remoteRes.output.trim() : '';
-      const repoIdentifier = parseRepoOwnerRepo(remoteUrl) || entry.name;
-
-      repos.push({
-        name: entry.name,
-        path: fullPath,
-        branch: branchRes.success && branchRes.output.trim() ? branchRes.output.trim() : 'main',
-        remote_url: remoteUrl,
-        repo_identifier: repoIdentifier,
-        system_root: systemDir
-      });
-    }
+    repos.push({
+      name: hit.name,
+      path: fullPath,
+      branch: branchRes.success && branchRes.output.trim() ? branchRes.output.trim() : 'main',
+      remote_url: remoteUrl,
+      repo_identifier: repoIdentifier,
+      system_root: hit.system_root
+    });
   }
 
   return repos;
@@ -410,13 +405,8 @@ async function handleApi(req, res, action) {
       return sendJson(res, 200, {
         repos,
         system_dirs: systemDirs,
-        output_dir: loadConfig().output_dir,
-        suggested_folders: loadConfig().suggested_folders
+        output_dir: loadConfig().output_dir
       });
-    }
-
-    if (action === 'detect_common_dirs') {
-      return sendJson(res, 200, { dirs: detectCommonDirs() });
     }
 
     if (action === 'get_git_identity') {

@@ -285,14 +285,66 @@ function updateZipEntry(zip, entryName, content) {
     }
 }
 
+const HEADER_REL = '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>';
+const FOOTER_REL = '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>';
+const HEADER_CONTENT_TYPE = '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>';
+const FOOTER_CONTENT_TYPE = '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>';
+
+function ensureDocumentRelationships(zip, needsHeader, needsFooter) {
+    const relsPath = 'word/_rels/document.xml.rels';
+    const entry = zip.getEntry(relsPath);
+    if (!entry) return;
+
+    let xml = zip.readAsText(entry);
+    const additions = [];
+    if (needsHeader && !/Target="header1\.xml"/.test(xml)) {
+        additions.push(HEADER_REL);
+    }
+    if (needsFooter && !/Target="footer1\.xml"/.test(xml)) {
+        additions.push(FOOTER_REL);
+    }
+    if (!additions.length) return;
+
+    xml = xml.replace('</Relationships>', `${additions.join('')}</Relationships>`);
+    updateZipEntry(zip, relsPath, xml);
+}
+
+function ensureContentTypeOverrides(zip, needsHeader, needsFooter) {
+    const entry = zip.getEntry('[Content_Types].xml');
+    if (!entry) return;
+
+    let xml = zip.readAsText(entry);
+    if (needsHeader && !xml.includes('/word/header1.xml')) {
+        xml = xml.replace('</Types>', `  ${HEADER_CONTENT_TYPE}\n</Types>`);
+    }
+    if (needsFooter && !xml.includes('/word/footer1.xml')) {
+        xml = xml.replace('</Types>', `  ${FOOTER_CONTENT_TYPE}\n</Types>`);
+    }
+    updateZipEntry(zip, '[Content_Types].xml', xml);
+}
+
+function ensurePackageParts(zip, { header = false, footer = false } = {}) {
+    if (!header && !footer) return;
+    ensureContentTypeOverrides(zip, header, footer);
+    ensureDocumentRelationships(zip, header, footer);
+}
+
 function writeDocxUpdates(outputPath, updates, templatePath) {
     const sourcePath = templatePath || outputPath;
     const zip = new AdmZip(readFileBufferSync(sourcePath));
     if (updates.documentXml) {
         updateZipEntry(zip, 'word/document.xml', updates.documentXml);
     }
-    if (updates.headerXml) {
+    const needsHeader = Boolean(updates.headerXml);
+    const needsFooter = Boolean(updates.footerXml);
+    if (needsHeader) {
         updateZipEntry(zip, 'word/header1.xml', updates.headerXml);
+    }
+    if (needsFooter) {
+        updateZipEntry(zip, 'word/footer1.xml', updates.footerXml);
+    }
+    if (needsHeader || needsFooter) {
+        ensurePackageParts(zip, { header: needsHeader, footer: needsFooter });
     }
     writeFileAtomicSync(outputPath, (tmpPath) => zip.writeZip(tmpPath));
 }

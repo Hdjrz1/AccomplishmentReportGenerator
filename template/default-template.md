@@ -1,110 +1,100 @@
-# Default Accomplishment Report Template
+# Default Accomplishment Report Template (v3)
 
-This file defines the **default Word report layout** used by Accomplishment Report Builder (ARB).  
-The app copies `default-template.docx` from this folder as the document shell, then fills it with your fetched Git data.
-
----
-
-## Document Title Block
-
-| Element | Style |
-|---------|--------|
-| **DAILY ACCOMPLISHMENT REPORT** | Arial, bold, 14pt (28 half-points), centered feel |
-| **{Project Title} Development** | Arial, 11pt (22 half-points) |
+Professional **5-section** Word layout — Gitmore / CodePulse hybrid design.  
+Built by `template/default-docx.js` and copied into `default-template.docx` on generate.
 
 ---
 
-## Metadata Table
+## Design System
 
-Two-column table with borders.
+| Token | Value | Usage |
+|-------|-------|--------|
+| Navy | `#002060` | Banner, headings, table headers |
+| Accent | `#0078A8` | Section numbers, callout border, header date |
+| Status green | `#1E7D4E` | Overall status line |
+| Label fill | `#E8EEF7` | Metadata label column |
+| Callout fill | `#F4F7FB` | Executive summary box |
+| Body muted | `#44546A` | Subtitles, footer, job title |
+| Alt row | `#F8FAFC` | Zebra striping |
 
-| Label (navy header `#002060` on light blue `#C7DAF1`) | Value |
-|--------------------------------------------------------|--------|
+**Fonts:** Calibri (body), Consolas (file paths)
+
+---
+
+## Cover Banner
+
+Full-width navy table with white text:
+
+- **DAILY ACCOMPLISHMENT REPORT**
+- **{Project Title}**
+- **{Reporting Period}**
+
+---
+
+## Status Line
+
+**Overall Status:** `On Track / For Review` (green)
+
+---
+
+## Metadata & Git Metrics Table
+
+| Label | Value |
+|-------|--------|
 | Developer Name | `{developer_name}` |
-| Date of Report | `{date_range_text}` |
+| Role / Department | `{job_title}` |
+| Reporting Period | `{date_range_text}` |
 | Project Title | `{project_title}` |
 | Branch / Repository | `{branches_text}` |
+| Report Generated | `{generated_date}` |
+| Commits Selected | `{commit_count}` |
+| Files Modified | `{file_count}` |
+| Repositories | `{repo_count}` |
 
 ---
 
-## Section 1 — Executive Summary
+## Sections
 
-**Heading:** `1. Executive Summary` (Arial bold, 12pt)
+### [1] Executive Summary
+Shaded callout box with accent left border.
 
-**Body:** Multi-paragraph text from `{executive_summary}`.
+### [2] Key Accomplishments & Technical Enhancements
+Grouped bullets:
+- **Features & Improvements**
+- **Bug Fixes**
+- **Technical / Infrastructure**
 
----
+### [3] Detailed File & Commit Activity
+- Git activity summary table (commits, files, repos)
+- File adjustments table (zebra rows, monospace paths)
 
-## Section 2 — Key Accomplishments & Technical Enhancements
+### [4] Impact and Verification
+Bulleted verification items.
 
-**Heading:** `2. Key Accomplishments & Technical Enhancements`
+### [5] Verification Status
+Paragraph + dual-column signature:
 
-**Body:** Bulleted list from `{key_accomplishments}`.
-
-Each line supports optional **Title: detail** formatting (title in bold).
-
-Example:
-
-```
-API Integration: Connected payment gateway endpoints.
-UI Polish: Refined sidebar spacing and dark mode transitions.
-```
-
----
-
-## Section 3 — Detailed File Adjustments & Code Changes
-
-**Heading:** `3. Detailed File Adjustments & Code Changes`
-
-**Body:** Table with navy header row (`#002060`, white text).
-
-| File Affected | Modifications Made |
-|---------------|-------------------|
-| `{file_path}` | Bullet list of changes |
-
-Populated from `{detailed_files}`. View modes in the app (Full / Compact / Summary Only) control how much detail is exported.
+| Prepared By | Date Submitted |
+|-------------|----------------|
+| `{developer_name}` | `{generated_date}` |
+| `{job_title}` | *Submitted for technical review.* |
 
 ---
 
-## Section 4 — Impact and Verification
+## Header (every page)
 
-**Heading:** `4. Impact and Verification`
-
-**Body:** Bulleted list from `{impact_verification}` (same **Title: detail** format as Section 2).
+`{Project Title} · Accomplishment Report · {Period}`
 
 ---
 
-## Section 5 — Verification Status
+## Footer (every page)
 
-**Heading:** `5. Verification Status`
-
-**Body:** Paragraph from `{verification_status}`.
-
----
-
-## Signature Block
-
-```
-Prepared By:
-
-{developer_name}   (bold)
-{job_title}
-```
-
----
-
-## Output File Naming
-
-Generated reports are saved to the configured output folder as:
-
-`Accomplishment Report - {date_range_text}.docx`
-
-Invalid filename characters in the date range are replaced with `-`.
+`{Project Title} · Page {n}`
 
 ---
 
 ## Customization
 
-- **Layout & styles:** Edit `default-template.docx` in this folder (Word styles, margins, fonts). Re-run `node template/build-default-template.js` only if you delete the `.docx` and need to regenerate the base shell.
-- **Section content:** Edited in the app before clicking **Generate DOCX Report**.
-- **This markdown file** is the source of truth for section order and placeholders; keep it in sync if you change the generator.
+- **Layout code:** `template/default-docx.js`
+- **Rebuild shell:** `node template/build-default-template.js`
+- **Metrics:** sent automatically from the app on generate

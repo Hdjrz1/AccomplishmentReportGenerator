@@ -26,16 +26,8 @@ const REPORT_TEMPLATES = {
   }
 };
 
-const DEFAULT_SUGGESTED_FOLDERS = [
-  'C:\\laragon\\www',
-  'C:\\xampp\\htdocs',
-  '%USERPROFILE%\\Documents\\Projects',
-  '%USERPROFILE%\\source\\repos'
-];
-
 const DEFAULT_CONFIG = {
   system_dirs: [],
-  suggested_folders: DEFAULT_SUGGESTED_FOLDERS,
   output_dir: path.join(os.homedir(), 'Documents', 'Accomplishment Reports')
 };
 
@@ -58,9 +50,6 @@ function loadConfig() {
         system_dirs: Array.isArray(parsed.system_dirs)
           ? parsed.system_dirs.map(expandPath).filter(Boolean)
           : [],
-        suggested_folders: Array.isArray(parsed.suggested_folders) && parsed.suggested_folders.length
-          ? parsed.suggested_folders.map(expandPath)
-          : DEFAULT_SUGGESTED_FOLDERS.map(expandPath),
         output_dir: expandPath(parsed.output_dir || DEFAULT_CONFIG.output_dir)
       };
     }
@@ -70,7 +59,6 @@ function loadConfig() {
 
   return {
     system_dirs: [],
-    suggested_folders: DEFAULT_SUGGESTED_FOLDERS.map(expandPath),
     output_dir: expandPath(DEFAULT_CONFIG.output_dir)
   };
 }
@@ -86,12 +74,6 @@ function resolveSystemDirs(requestedDirs) {
       .map(dir => expandPath(String(dir || '').trim()))
       .filter(Boolean)
   )];
-}
-
-function detectCommonDirs() {
-  const config = loadConfig();
-  const candidates = [...new Set([...config.suggested_folders, ...config.system_dirs])];
-  return candidates.filter(dir => isValidSystemDir(dir));
 }
 
 function isValidSystemDir(dir) {
@@ -266,31 +248,88 @@ function resolveGitExecutable() {
   return 'git';
 }
 
+const REPO_SCAN_MAX_DEPTH = 4;
+
+const REPO_SCAN_SKIP_DIRS = new Set([
+  'node_modules', 'vendor', 'dist', 'build', '.next', '.nuxt', 'coverage',
+  '__pycache__', '.venv', 'venv', 'target', 'bin', 'obj', 'packages',
+  'bower_components', '.cache', '.turbo', 'out', '.gradle', '.idea', 'tmp', 'temp'
+]);
+
+function isGitRepository(dirPath) {
+  try {
+    return fs.existsSync(path.join(dirPath, '.git'));
+  } catch {
+    return false;
+  }
+}
+
+function getRepoDisplayName(repoPath, systemRoot) {
+  const resolvedRepo = path.resolve(repoPath);
+  const resolvedRoot = path.resolve(systemRoot);
+  if (resolvedRepo.toLowerCase() === resolvedRoot.toLowerCase()) {
+    return path.basename(resolvedRoot);
+  }
+  const rel = path.relative(resolvedRoot, resolvedRepo);
+  if (!rel || rel.startsWith('..')) return path.basename(resolvedRepo);
+  return rel.split(path.sep).join('/');
+}
+
+function discoverGitRepoPaths(systemDir, maxDepth = REPO_SCAN_MAX_DEPTH) {
+  const resolvedRoot = expandPath(systemDir);
+  if (!isValidSystemDir(resolvedRoot)) return [];
+
+  const results = [];
+  const seen = new Set();
+
+  function walk(currentDir, depth) {
+    if (depth > maxDepth) return;
+
+    if (isGitRepository(currentDir)) {
+      const key = path.resolve(currentDir).toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({
+          path: path.resolve(currentDir),
+          system_root: resolvedRoot,
+          name: getRepoDisplayName(currentDir, resolvedRoot)
+        });
+      }
+      return;
+    }
+
+    let entries;
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const dirName = entry.name;
+      if (dirName === '.' || dirName === '..') continue;
+      if (dirName.startsWith('.')) continue;
+      if (REPO_SCAN_SKIP_DIRS.has(dirName.toLowerCase())) continue;
+
+      walk(path.join(currentDir, dirName), depth + 1);
+    }
+  }
+
+  walk(resolvedRoot, 0);
+  return results.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function findRepoPathsFromSystemDirs(systemDirs, limit = 8) {
   const repos = [];
   const dirs = Array.isArray(systemDirs) ? systemDirs : [];
 
   for (const systemDir of dirs) {
-    const resolved = expandPath(systemDir);
-    if (!isValidSystemDir(resolved)) continue;
-
-    let entries = [];
-    try {
-      entries = fs.readdirSync(resolved, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const fullPath = path.join(resolved, entry.name);
-      try {
-        if (fs.existsSync(path.join(fullPath, '.git'))) {
-          repos.push(fullPath);
-          if (repos.length >= limit) return repos;
-        }
-      } catch {
-        // continue
+    for (const hit of discoverGitRepoPaths(systemDir)) {
+      if (!repos.includes(hit.path)) {
+        repos.push(hit.path);
+        if (repos.length >= limit) return repos;
       }
     }
   }
@@ -422,7 +461,8 @@ module.exports = {
   ensureTemplateDocx,
   expandPath,
   isValidSystemDir,
-  detectCommonDirs,
   getGitIdentity,
-  resolveGitExecutable
+  resolveGitExecutable,
+  discoverGitRepoPaths,
+  REPO_SCAN_MAX_DEPTH
 };

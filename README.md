@@ -48,20 +48,12 @@ The app works on **Windows** (primary target). It may run on macOS/Linux if Git 
    ```json
    {
      "system_dirs": [],
-     "suggested_folders": [
-       "C:\\laragon\\www",
-       "C:\\xampp\\htdocs",
-       "C:\\ACTS SYSTEM",
-       "%USERPROFILE%\\Documents\\Projects",
-       "%USERPROFILE%\\source\\repos"
-     ],
      "output_dir": "%USERPROFILE%\\Documents\\Accomplishment Reports"
    }
    ```
 
-   - **`suggested_folders`** — folders shown as quick picks during setup
    - **`output_dir`** — where generated reports are saved (default: `Documents\Accomplishment Reports`)
-   - **`system_dirs`** — optional default scan folders (usually set through the UI instead)
+   - **`system_dirs`** — optional default project folders (usually set through Settings in the app)
 
 4. **(Optional) Customize the report layout** — see `template/default-template.md` for section structure. The bundled `template/default-template.docx` is used automatically. To rebuild the base shell after changes, run:
 
@@ -121,16 +113,14 @@ On first launch, a **Quick Setup** wizard opens. You can reopen it anytime from 
 
 ### Step 3 — Folders
 
-Add one or more folders where your Git repositories live, for example:
+In **Settings → Step 3: Project folders**:
 
-- `C:\laragon\www`
-- `C:\ACTS SYSTEM`
-- `%USERPROFILE%\source\repos`
+1. Click **Choose folder on this PC** to pick where your Git projects live (e.g. `C:\laragon\www`, `C:\ACTS SYSTEM`, or `%USERPROFILE%\source\repos`).
+2. Or expand **Or paste a folder path manually** if browse does not give the full path.
 
-Use **Browse folder** (Chrome/Edge) or paste a path and click **Add**.  
-Suggested folders from `config.json` appear when they exist on your machine.
+ARB **recursively scans** up to 4 folder levels deep, so nested repos like `C:\Projects\client\my-app` are found automatically.
 
-Click **Finish Setup** when done. Your profile and folders are saved in the browser (`localStorage`) and scan folders are sent to the server when fetching logs.
+Click **Finish Setup** when done. Your profile and project folders are saved in the browser (`localStorage`).
 
 ---
 
@@ -248,7 +238,7 @@ A success toast shows the full path. Open the file in Microsoft Word or compatib
 
 | Problem | What to try |
 |---------|-------------|
-| No repositories listed | Open **Settings** and add folders that contain Git repos (folders with a `.git` directory) |
+| No repositories listed | Open **Settings** and add a parent folder that contains git repos (directly or nested up to 4 levels) |
 | Fetch returns no commits | Confirm your **Git Username** matches commit author names; widen the date range |
 | “No template” / generation fails | Run `node template/build-default-template.js` to recreate `template/default-template.docx` |
 | Browse folder does nothing | Use Chrome or Edge; or paste the folder path manually |

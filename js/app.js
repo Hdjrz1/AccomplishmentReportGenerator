@@ -43,6 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let inactiveRepositories = [];
     let lastFetchedRepos = [];
     let logsFetched = false;
+    let isGeneratingReport = false;
     
     // UI Elements
     const themeToggle = document.getElementById('theme-toggle');
@@ -67,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const stickyCommitsMeta = document.getElementById('sticky-commits-meta');
     const stickyTemplateMeta = document.getElementById('sticky-template-meta');
     const stickyOutputHint = document.getElementById('sticky-output-hint');
+    const stickyGenerateBlockReason = document.getElementById('sticky-generate-block-reason');
     
     const selectAllReposCheck = document.getElementById('select-all-repos');
     const reposContainer = document.getElementById('repos-checkboxes');
@@ -82,12 +84,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const setupProjectTitleInput = document.getElementById('setup-project-title');
     const setupGitAuthorInput = document.getElementById('setup-git-author-input');
     const setupDetectGitAuthorBtn = document.getElementById('setup-detect-git-author-btn');
-    const setupSuggestedFolders = document.getElementById('setup-suggested-folders');
     const setupSystemDirsList = document.getElementById('setup-system-dirs-list');
     const setupBrowseFolderBtn = document.getElementById('setup-browse-folder-btn');
     const setupFolderPathInput = document.getElementById('setup-folder-path-input');
     const setupAddFolderPathBtn = document.getElementById('setup-add-folder-path-btn');
-    const setupSuggestedSection = document.getElementById('setup-suggested-section');
     const setupBackBtn = document.getElementById('setup-back-btn');
     const setupNextBtn = document.getElementById('setup-next-btn');
     const setupFinishBtn = document.getElementById('setup-finish-btn');
@@ -107,7 +107,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const SETUP_COMPLETE_KEY = 'setup_complete';
     const VALID_WORK_MODES = ['commits', 'uncommitted', 'both'];
     let systemDirs = [];
-    let suggestedFolders = [];
     let gitAuthors = [];
     let setupSystemDirs = [];
     let setupStep = 1;
@@ -284,7 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         headerStatusBadge.classList.add('is-warn');
-        headerStatusText.textContent = systemDirs.length ? 'No repositories found' : 'Add scan folders';
+        headerStatusText.textContent = systemDirs.length ? 'No repositories found' : 'Add a project folder';
     }
 
     function updateEmptyStateHint() {
@@ -321,6 +320,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setGenerateButtonBusy(isBusy) {
+        isGeneratingReport = isBusy;
         const idleHtml = '<i class="fa-solid fa-file-word"></i> Generate DOCX Report';
         const busyHtml = '<i class="fa-solid fa-spinner fa-spin"></i> Writing DOCX Report...';
 
@@ -591,7 +591,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? (systemDirs.length <= 2
                 ? systemDirs.map(dir => escapeHtml(dir)).join(', ')
                 : `${systemDirs.slice(0, 2).map(dir => escapeHtml(dir)).join(', ')} <span class="help-text">+${systemDirs.length - 2} more</span>`)
-            : '<span class="help-text">No folders</span>';
+            : '<span class="help-text">No project folders</span>';
 
         settingsSummaryContent.hidden = true;
         settingsSummaryContent.innerHTML = `
@@ -600,7 +600,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="settings-summary-row"><span class="settings-summary-label">Project</span><span class="settings-summary-value">${escapeHtml(projectTitle) || '—'}</span></div>
             <div class="settings-summary-row"><span class="settings-summary-label">Git</span><span class="settings-summary-value">${escapeHtml(gitUser) || '—'}</span></div>
             <div class="settings-summary-row"><span class="settings-summary-label">Work</span><span class="settings-summary-value">${workModeLabels[workMode] || workMode}</span></div>
-            <div class="settings-summary-row settings-summary-row--folders"><span class="settings-summary-label">Folders</span><span class="settings-summary-value" title="${escapeHtml(folderTitle)}">${folderPreview}</span></div>
+            <div class="settings-summary-row settings-summary-row--folders"><span class="settings-summary-label">Project folders</span><span class="settings-summary-value" title="${escapeHtml(folderTitle)}">${folderPreview}</span></div>
         `;
         updateAppStatus();
     }
@@ -627,18 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function detectGitIdentity() {
-        let systemDirsForDetect = [...setupSystemDirs];
-        if (systemDirsForDetect.length === 0) {
-            systemDirsForDetect = [...new Set([...suggestedFolders])];
-            try {
-                const detectResponse = await apiFetch('detect_common_dirs');
-                const detectData = detectResponse.data;
-                systemDirsForDetect = [...new Set([...systemDirsForDetect, ...(detectData.dirs || [])])];
-            } catch {
-                // keep suggested folders only
-            }
-        }
-
+        const systemDirsForDetect = [...setupSystemDirs];
         const authorList = [getSetupGitUsername()].filter(Boolean);
         const inputValue = setupGitAuthorInput?.value?.trim() || '';
 
@@ -807,32 +796,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
-    function renderSetupSuggestedFolders() {
-        const available = suggestedFolders.filter(dir =>
-            !setupSystemDirs.some(existing => existing.toLowerCase() === dir.toLowerCase())
-        );
-        setupSuggestedFolders.innerHTML = '';
-        if (available.length === 0) {
-            if (setupSuggestedSection) setupSuggestedSection.hidden = true;
-            return;
-        }
-        if (setupSuggestedSection) setupSuggestedSection.hidden = false;
-        available.forEach(dir => {
-            const chip = document.createElement('button');
-            chip.type = 'button';
-            chip.className = 'suggested-folder-chip';
-            chip.title = dir;
-            chip.textContent = dir;
-            chip.addEventListener('click', () => addSetupSystemDir(dir));
-            setupSuggestedFolders.appendChild(chip);
-        });
-    }
-
     function renderSetupSystemDirsList() {
         setupSystemDirsList.innerHTML = '';
         if (setupSystemDirs.length === 0) {
-            setupSystemDirsList.innerHTML = '<p class="help-text setup-folders-empty">No folders added yet.</p>';
-            renderSetupSuggestedFolders();
+            setupSystemDirsList.innerHTML = '<p class="help-text setup-folders-empty">No folders yet. Click <strong>Choose folder on this PC</strong> below to add where your Git projects live.</p>';
             return;
         }
         setupSystemDirs.forEach(dir => {
@@ -851,14 +818,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             setupSystemDirsList.appendChild(row);
         });
-        renderSetupSuggestedFolders();
     }
 
     function addSetupSystemDir(folderPath) {
         const normalized = normalizeFolderPath(folderPath);
         if (!normalized) return false;
         if (setupSystemDirs.some(dir => dir.toLowerCase() === normalized.toLowerCase())) {
-            showToast('Warning', 'That folder is already selected.', 'warning');
+            showToast('Warning', 'That folder is already in your list.', 'warning');
             return false;
         }
         setupSystemDirs.push(normalized);
@@ -876,7 +842,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function addSetupFolderFromInput() {
         const raw = setupFolderPathInput?.value?.trim();
         if (!raw) {
-            showToast('Warning', 'Enter a folder path to add.', 'warning');
+            showToast('Warning', 'Enter the full folder path (e.g. C:\\Projects).', 'warning');
             return;
         }
 
@@ -894,7 +860,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (addSetupSystemDir(data.path || raw)) {
                 setupFolderPathInput.value = '';
-                setupFolderPathInput.placeholder = 'Paste folder path (e.g. C:\\ACTS SYSTEM)';
+                setupFolderPathInput.placeholder = 'e.g. C:\\Projects or C:\\laragon\\www';
             }
         } catch (err) {
             console.error(err);
@@ -903,6 +869,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function promptForFolderPathCompletion(folderName) {
+        const manualSection = document.querySelector('.setup-folders-manual');
+        if (manualSection) manualSection.open = true;
         if (setupFolderPathInput) {
             setupFolderPathInput.placeholder = `Enter full path for "${folderName}" (e.g. C:\\${folderName})`;
             setupFolderPathInput.focus();
@@ -910,12 +878,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         showToast(
             'Path needed',
-            `Chrome selected "${folderName}". Paste the full folder path above and click Add.`,
+            `Browser picked "${folderName}". Open "Or paste a folder path manually" and enter the full path, then click Add folder.`,
             'warning'
         );
     }
 
-    const BROWSE_FOLDER_BTN_HTML = '<i class="fa-solid fa-folder-open" aria-hidden="true"></i> Browse folder';
+    const BROWSE_FOLDER_BTN_HTML = '<i class="fa-solid fa-folder-open" aria-hidden="true"></i> Choose folder on this PC';
 
     async function browseForFolder() {
         const button = setupBrowseFolderBtn;
@@ -1001,8 +969,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const candidates = [...new Set([
             ...setupSystemDirs,
-            ...systemDirs,
-            ...suggestedFolders
+            ...systemDirs
         ])];
 
         const match = candidates.find(candidate => {
@@ -1020,7 +987,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (repositories.length === 0) {
             const folderHint = systemDirs.length
                 ? systemDirs.join(', ')
-                : 'your configured system folders';
+                : 'your project folders';
             reposContainer.innerHTML = `<p class="help-text">No git repositories found in ${folderHint}.</p>`;
             if (repoSearchInput) repoSearchInput.hidden = true;
             updateAppStatus();
@@ -1099,28 +1066,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function loadSuggestedFolders() {
-        try {
-            const detectResult = await apiFetch('detect_common_dirs');
-            const detectData = detectResult.data;
-            const detected = detectData.dirs || [];
-            suggestedFolders = [...new Set([...suggestedFolders, ...detected])];
-        } catch {
-            // keep config suggestions only
-        }
-    }
-
     async function initData() {
         try {
             const configResult = await apiFetch('get_config');
             const config = configResult.data;
-            suggestedFolders = config.suggested_folders || [];
             outputDir = config.output_dir || '';
             if (metaOutputDir && outputDir) {
                 metaOutputDir.textContent = outputDir;
             }
-
-            await loadSuggestedFolders();
 
             if (isSetupComplete()) {
                 loadSidebarFromStorage();
@@ -1162,7 +1115,6 @@ document.addEventListener('DOMContentLoaded', () => {
         setWizardFooterButtons(step);
         if (step === 3) {
             renderSetupSystemDirsList();
-            renderSetupSuggestedFolders();
             updateFinishButtonState();
         }
     }
@@ -1360,7 +1312,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (step === 3) {
             if (setupSystemDirs.length === 0) {
-                showToast('Required', 'Select at least one folder using Browse or a suggestion.', 'warning');
+                showToast('Required', 'Add at least one project folder using Choose folder or paste a path manually.', 'warning');
                 return false;
             }
         }
@@ -1458,7 +1410,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (systemDirs.length === 0) {
-            showToast('Warning', 'Add at least one system folder.', true);
+            showToast('Warning', 'Add at least one project folder in Settings.', true);
             return;
         }
         localStorage.setItem('project_title', projTitleInput.value);
@@ -1467,7 +1419,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Find checked repos
         const checkedBoxes = document.querySelectorAll('.repo-checkbox:checked');
         if (checkedBoxes.length === 0) {
-            showToast('Warning', 'Please select at least one system directory.', true);
+            showToast('Warning', 'Select at least one repository from the list.', true);
             return;
         }
         
@@ -1512,6 +1464,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Build UI
             renderCommitsList();
+            uncheckInactiveRepositories();
             generateDraftSections(selectedRepos);
             
             // Toggle view
@@ -1531,8 +1484,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.inactive_repos && data.inactive_repos.length > 0) {
                 setTimeout(() => {
                     showToast(
-                        'No Commits Found',
-                        `No commits found in: ${data.inactive_repos.join(', ')}. Consider unchecking them to keep your report clean.`,
+                        'Repos Unchecked',
+                        `No commits in date range for: ${data.inactive_repos.join(', ')}. Those repos were unchecked automatically.`,
                         'warning'
                     );
                 }, 1500);
@@ -1606,6 +1559,114 @@ document.addEventListener('DOMContentLoaded', () => {
         const checkedBoxes = document.querySelectorAll('.repo-checkbox:checked');
         const checkedNames = Array.from(checkedBoxes).map(cb => cb.dataset.name);
         return inactiveRepositories.some(name => checkedNames.includes(name));
+    }
+
+    function uncheckInactiveRepositories() {
+        if (!inactiveRepositories.length) return;
+        let changed = false;
+        inactiveRepositories.forEach(name => {
+            document.querySelectorAll('.repo-checkbox').forEach(cb => {
+                if (cb.dataset.name === name && cb.checked) {
+                    cb.checked = false;
+                    changed = true;
+                }
+            });
+        });
+        if (changed && selectAllReposCheck) {
+            const allChecked = document.querySelectorAll('.repo-checkbox').length ===
+                document.querySelectorAll('.repo-checkbox:checked').length;
+            selectAllReposCheck.checked = allChecked;
+        }
+    }
+
+    function buildFallbackFileRowsFromCommits(activeCommits) {
+        if (!activeCommits.length) return [];
+
+        const byRepo = new Map();
+        activeCommits.forEach(commit => {
+            if (!byRepo.has(commit.repo)) byRepo.set(commit.repo, []);
+            const messages = byRepo.get(commit.repo);
+            const msg = String(commit.message || '').trim();
+            if (msg && !messages.includes(msg)) messages.push(msg);
+        });
+
+        return [...byRepo.entries()].map(([repo, messages]) => ({
+            file: `${repo} (selected commits)`,
+            modifications: messages,
+            modificationsText: messages.map(m => `• ${m}`).join('\n'),
+            impact: 'General'
+        }));
+    }
+
+    function getGenerateReadiness() {
+        if (!logsFetched) {
+            return { canGenerate: false, reason: 'Fetch git logs first.' };
+        }
+
+        const devName = devNameInput.value.trim();
+        const jobTitle = jobTitleInput.value.trim();
+        const projTitle = projTitleInput.value.trim();
+        const sinceDate = sinceInput.value;
+        const untilDate = untilInput.value;
+
+        if (!devName || !jobTitle || !projTitle) {
+            return { canGenerate: false, reason: 'Complete your profile in Settings (name, job title, project).' };
+        }
+        if (!sinceDate || !untilDate) {
+            return { canGenerate: false, reason: 'Set a date range in the sidebar.' };
+        }
+
+        const activeCommits = getActiveCommits();
+        const hasFileData = getFilteredFileData().length > 0;
+        if (activeCommits.length === 0 && !hasFileData) {
+            return { canGenerate: false, reason: 'Select at least one commit from the fetched log.' };
+        }
+
+        const execSummaryVal = fieldExecSummary.value.trim();
+        const keyAccomplishmentsVal = fieldKeyAccomplishments.value.trim().split('\n').filter(l => l.trim() !== '');
+        const impactVerificationVal = fieldImpactVerification.value.trim().split('\n').filter(l => l.trim() !== '');
+        const verificationStatusVal = fieldVerificationStatus.value.trim();
+        const fileRows = collectFileRowsForReport();
+
+        if (!execSummaryVal) {
+            return { canGenerate: false, reason: 'Fill in the Executive Summary section.' };
+        }
+        if (keyAccomplishmentsVal.length === 0) {
+            return { canGenerate: false, reason: 'Fill in Key Accomplishments (or fetch logs again to auto-draft).' };
+        }
+        if (fileRows.length === 0) {
+            return { canGenerate: false, reason: 'No file changes found. Select commits that include code changes.' };
+        }
+        if (impactVerificationVal.length === 0) {
+            return { canGenerate: false, reason: 'Fill in Impact and Verification.' };
+        }
+        if (!verificationStatusVal) {
+            return { canGenerate: false, reason: 'Fill in Verification Status.' };
+        }
+
+        const validationFailed = fileRows.some(row => !row.file || !row.modifications);
+        if (validationFailed) {
+            return { canGenerate: false, reason: 'File adjustments data is incomplete. Try fetching Git logs again.' };
+        }
+
+        return { canGenerate: true, reason: '' };
+    }
+
+    function getBranchesTextForReport() {
+        const activeRepos = new Set(getActiveCommits().map(c => c.repo));
+        const branchLines = [];
+
+        document.querySelectorAll('.repo-checkbox:checked').forEach(cb => {
+            if (activeRepos.has(cb.dataset.name)) {
+                branchLines.push(`${cb.dataset.branch} / ${cb.dataset.ident}`);
+            }
+        });
+
+        if (branchLines.length === 0 && lastFetchedRepos.length) {
+            return lastFetchedRepos.map(r => `${r.branch} / ${r.repo_identifier}`).join('\n');
+        }
+
+        return branchLines.join('\n');
     }
 
     function buildOutputFileName(dateRangeText) {
@@ -1762,15 +1823,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function updateGenerateButtonState() {
-        const activeCommits = getActiveCommits();
-        const hasFileData = getFilteredFileData().length > 0;
-        const hasInactiveSelected = hasSelectedInactiveRepo();
-        
-        if (hasInactiveSelected || (activeCommits.length === 0 && !hasFileData)) {
-            generateReportBtn.disabled = true;
-        } else {
-            generateReportBtn.disabled = false;
+        const readiness = getGenerateReadiness();
+
+        if (generateReportBtn) {
+            generateReportBtn.disabled = isGeneratingReport || !logsFetched;
+            generateReportBtn.classList.toggle('is-not-ready', !readiness.canGenerate && logsFetched && !isGeneratingReport);
+            generateReportBtn.setAttribute('aria-disabled', String(!readiness.canGenerate && logsFetched && !isGeneratingReport));
         }
+
+        if (stickyGenerateBlockReason) {
+            if (!readiness.canGenerate && logsFetched && !isGeneratingReport) {
+                stickyGenerateBlockReason.textContent = readiness.reason;
+                stickyGenerateBlockReason.hidden = false;
+            } else {
+                stickyGenerateBlockReason.hidden = true;
+                stickyGenerateBlockReason.textContent = '';
+            }
+        }
+
         updateReportOutputPreview();
         updateAppStatus();
     }
@@ -2114,7 +2184,10 @@ document.addEventListener('DOMContentLoaded', () => {
     initReportTemplateSelect();
 
     [fieldExecSummary, fieldKeyAccomplishments, fieldImpactVerification, fieldVerificationStatus].forEach(field => {
-        field?.addEventListener('input', () => updateReportOutputPreview());
+        field?.addEventListener('input', () => {
+            updateReportOutputPreview();
+            updateGenerateButtonState();
+        });
     });
 
     function shortImpactLabel(filePath) {
@@ -2249,7 +2322,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function collectFileRowsForReport() {
-        return compactFileRows(getFilteredFileData(), getFileSectionMode());
+        let rawRows = getFilteredFileData();
+        if (rawRows.length === 0) {
+            rawRows = buildFallbackFileRowsFromCommits(getActiveCommits());
+        }
+        return compactFileRows(rawRows, getFileSectionMode());
     }
 
     function getFileTableTotalPages() {
@@ -2279,9 +2356,12 @@ document.addEventListener('DOMContentLoaded', () => {
         fileChangesTbody.innerHTML = '';
 
         if (cachedFileDisplayRows.length === 0) {
-            const emptyMessage = fetchedFiles.length === 0
+            const activeCommits = getActiveCommits();
+            const emptyMessage = fetchedFiles.length === 0 && activeCommits.length === 0
                 ? 'No modified files found. Fetch Git logs to populate this table.'
-                : 'No file modifications for selected commits.';
+                : activeCommits.length > 0
+                    ? 'No per-file changes linked to selected commits. Commit summaries will be used in the report.'
+                    : 'No file modifications for selected commits.';
             fileChangesTbody.innerHTML = `
                 <tr class="empty-table-row">
                     <td colspan="2" class="text-center" style="color: var(--text-muted);">${emptyMessage}</td>
@@ -2314,12 +2394,15 @@ document.addEventListener('DOMContentLoaded', () => {
     
     function renderFileChangesGrid() {
         fileTableCurrentPage = 1;
-        const rawRows = getFilteredFileData();
+        let rawRows = getFilteredFileData();
+        if (rawRows.length === 0) {
+            rawRows = buildFallbackFileRowsFromCommits(getActiveCommits());
+        }
         const mode = getFileSectionMode();
         updateFileSortLabel(mode);
         cachedFileDisplayRows = rawRows.length === 0 ? [] : compactFileRows(rawRows, mode);
         renderFileTablePage();
-        updateReportOutputPreview();
+        updateGenerateButtonState();
     }
 
     fileTablePrevBtn.addEventListener('click', () => {
@@ -2384,56 +2467,31 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Submit/Generate DOCX report action
     async function generateReport() {
-        // Validation
+        const readiness = getGenerateReadiness();
+        if (!readiness.canGenerate) {
+            showToast('Cannot Generate', readiness.reason, 'warning');
+            return;
+        }
+
         const devName = devNameInput.value.trim();
         const jobTitle = jobTitleInput.value.trim();
         const projTitle = projTitleInput.value.trim();
         const sinceDate = sinceInput.value;
         const untilDate = untilInput.value;
-        
-        if (!devName || !jobTitle || !projTitle || !sinceDate || !untilDate) {
-            showToast('Warning', 'Please check that all sidebar settings are completed.', true);
-            return;
-        }
-        
-        const activeCommits = getActiveCommits();
-        const hasFileData = getFilteredFileData().length > 0;
-        if (activeCommits.length === 0 && !hasFileData) {
-            showToast('Generation Blocked', 'No git commits selected or file modifications found. Report generation requires work data.', 'error');
-            return;
-        }
-        
-        // Assemble branch text based on checked repos
-        const checkedBoxes = document.querySelectorAll('.repo-checkbox:checked');
-        const branchLines = Array.from(checkedBoxes).map(cb => `${cb.dataset.branch} / ${cb.dataset.ident}`);
-        const branchesTextStr = branchLines.join("\n");
-        
+        const branchesTextStr = getBranchesTextForReport();
         const dateRangeStr = formatDateRange(sinceDate, untilDate);
-        
-        // Compile grid table rows
         const fileRows = collectFileRowsForReport();
-        const validationFailed = fileRows.some(row => !row.file || !row.modifications);
-        
-        if (validationFailed) {
-            showToast('Warning', 'File adjustments data is incomplete. Try fetching Git logs again.', true);
-            return;
-        }
-        
-        // Section Text Values
+        const activeCommits = getActiveCommits();
+        const repoCount = branchesTextStr.split('\n').filter(Boolean).length;
+
         const execSummaryVal = fieldExecSummary.value.trim();
         const keyAccomplishmentsVal = fieldKeyAccomplishments.value.trim().split('\n').filter(l => l.trim() !== '');
         const impactVerificationVal = fieldImpactVerification.value.trim().split('\n').filter(l => l.trim() !== '');
         const verificationStatusVal = fieldVerificationStatus.value.trim();
-        
-        if (!execSummaryVal || keyAccomplishmentsVal.length === 0 || fileRows.length === 0 || impactVerificationVal.length === 0 || !verificationStatusVal) {
-            showToast('Warning', 'All report sections must have text filled out.', true);
-            return;
-        }
-        
-        // Set generating state
+
         setGenerateButtonBusy(true);
         showReportLoadingOverlay(buildOutputFileName(dateRangeStr));
-        
+
         try {
             const payload = {
                 template_id: getReportTemplateId(),
@@ -2448,6 +2506,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 file_section_mode: getFileSectionMode(),
                 impact_verification: impactVerificationVal,
                 verification_status: verificationStatusVal,
+                commit_count: activeCommits.length,
+                file_count: fileRows.length,
+                repo_count: repoCount,
+                report_status: 'On Track / For Review',
+                generated_date: new Date().toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                }),
                 acts_environment: actsEnvironmentInput?.value.trim() || '',
                 acts_system_phase: actsSystemPhaseInput?.value.trim() || '',
                 acts_status: actsStatusInput?.value.trim() || '',
@@ -2455,17 +2522,21 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             saveActsMetaToStorage();
-            
+
             const reportResult = await apiFetch('generate_report', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            
+
+            if (!reportResult.response.ok) {
+                throw new Error(reportResult.data.error || `Server error (${reportResult.response.status})`);
+            }
+
             const result = reportResult.data;
-            
+
             if (result.success) {
-                const savedPath = result.file_path || `${outputDir}\\${result.file_name}`;
+                const savedPath = result.file_path || joinOutputPath(outputDir, result.file_name);
                 await hideReportLoadingOverlay({ success: true });
                 const toastMsg = result.alternate_name_used
                     ? `The original file was open or locked. Saved as: ${savedPath}`
@@ -2473,6 +2544,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('Report Generated!', toastMsg);
                 console.log('Saved to:', savedPath);
                 invalidateOutputDocsCache();
+                updateReportOutputPreview();
             } else {
                 throw new Error(result.error || 'Unknown server error');
             }
